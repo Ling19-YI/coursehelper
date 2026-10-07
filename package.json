@@ -1,0 +1,41 @@
+{
+  "name": "coursehelper",
+  "productName": "刷课助手 CourseHelper",
+  "version": "1.0.0",
+  "description": "超星学习通自动刷课助手",
+  "main": "app/dist/main/index.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs && vite build",
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder",
+    "issue-code": "tsx tools/issue-code.ts",
+    "smoke": "node scripts/smoke.mjs",
+    "spike": "node scripts/spike.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^44.6.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vite": "^7.0.0",
+    "@ant-design/icons": "^6.3.4",
+    "antd": "^6.0.0",
+    "playwright": "^1.63.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "allowScripts": {
+    "electron@44.6.0": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  },
+  "author": "CourseHelper"
+}

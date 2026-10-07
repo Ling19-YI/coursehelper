@@ -1,0 +1,29 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type { Api } from '../shared/api';
+import type { EngineEvent } from '../shared/types';
+
+const api: Api = {
+  onEngineEvent: cb => {
+    const handler = (_e: unknown, data: EngineEvent) => cb(data);
+    ipcRenderer.on('engine:event', handler);
+    return () => ipcRenderer.removeListener('engine:event', handler);
+  },
+  getState: () => ipcRenderer.invoke('engine:state'),
+  getProgress: () => ipcRenderer.invoke('engine:progress'),
+  listCourses: () => ipcRenderer.invoke('engine:listCourses'),
+  start: (courseIds, resume) => ipcRenderer.invoke('engine:start', courseIds, resume),
+  pause: () => ipcRenderer.send('engine:pause'),
+  resume: () => ipcRenderer.send('engine:resume'),
+  stop: () => ipcRenderer.send('engine:stop'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: patch => ipcRenderer.invoke('settings:set', patch),
+  getUsername: () => ipcRenderer.invoke('credentials:get'),
+  setCredentials: (username, password) => ipcRenderer.invoke('credentials:set', username, password),
+  clearCredentials: () => ipcRenderer.invoke('credentials:clear'),
+  activate: code => ipcRenderer.invoke('license:activate', code),
+  licenseInfo: () => ipcRenderer.invoke('license:info'),
+  machineId: () => ipcRenderer.invoke('license:machineId'),
+  getAppInfo: () => ipcRenderer.invoke('app:info'),
+};
+
+contextBridge.exposeInMainWorld('ch', api);

@@ -1,0 +1,104 @@
+import { app, safeStorage } from 'electron';
+import * as fs from 'fs';
+import * as path from 'path';
+import { DEFAULT_SETTINGS, type AppSettings, type Credentials } from '../shared/types';
+
+const LEGACY_DIR = 'C:\\Users\\colorful\\Documents\\Default Project\\-';
+
+function readJson<T>(file: string): T | null {
+  try {
+    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf-8'));
+  } catch {}
+  return null;
+}
+
+export class Store {
+  readonly userData: string;
+  readonly settingsFile: string;
+  readonly credsFile: string;
+  readonly dataDir: string;
+  settings: AppSettings;
+
+  constructor() {
+    this.userData = app.getPath('userData');
+    this.settingsFile = path.join(this.userData, 'settings.json');
+    this.credsFile = path.join(this.userData, 'credentials.enc');
+    this.dataDir = path.join(this.userData, 'data');
+
+    const disk = readJson<Partial<AppSettings>>(this.settingsFile) || {};
+    this.settings = { ...DEFAULT_SETTINGS, ...disk };
+    if (!this.settings.dataDir) this.settings.dataDir = this.dataDir;
+
+    this.migrateLegacy();
+    if (!fs.existsSync(this.settings.dataDir)) fs.mkdirSync(this.settings.dataDir, { recursive: true });
+  }
+
+  saveSettings(patch?: Partial<AppSettings>) {
+    if (patch) Object.assign(this.settings, patch);
+    fs.writeFileSync(this.settingsFile, JSON.stringify(this.settings, null, 2), 'utf-8');
+  }
+
+  loadCredentials(): Credentials | null {
+    try {
+      if (fs.existsSync(this.credsFile)) {
+        const buf = fs.readFileSync(this.credsFile);
+        if (safeStorage.isEncryptionAvailable()) {
+          return JSON.parse(safeStorage.decryptString(buf));
+        }
+        return JSON.parse(buf.toString('utf-8'));
+      }
+    } catch (e) {
+      // 加密数据不可读（如被其他环境破坏）→ 删除并尝试重新迁移
+      console.warn('[store] 读取账号失败，尝试重新迁移:', e);
+      try {
+        fs.unlinkSync(this.credsFile);
+      } catch {}
+      this.migrateLegacy();
+      try {
+        if (fs.existsSync(this.credsFile)) {
+          const buf = fs.readFileSync(this.credsFile);
+          if (safeStorage.isEncryptionAvailable()) {
+            return JSON.parse(safeStorage.decryptString(buf));
+          }
+          return JSON.parse(buf.toString('utf-8'));
+        }
+      } catch {}
+    }
+    return null;
+  }
+
+  saveCredentials(c: Credentials) {
+    const json = Buffer.from(JSON.stringify(c), 'utf-8');
+    const out = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(json.toString('utf-8')) : json;
+    fs.writeFileSync(this.credsFile, out);
+  }
+
+  clearCredentials() {
+    try {
+      fs.unlinkSync(this.credsFile);
+    } catch {}
+  }
+
+  /** 从旧命令行版本迁移凭证与进度（一次性） */
+  private migrateLegacy() {
+    try {
+      const legacyCreds = path.join(LEGACY_DIR, 'credentials.json');
+      if (!fs.existsSync(this.credsFile) && fs.existsSync(legacyCreds)) {
+        const c = readJson<Credentials>(legacyCreds);
+        if (c?.username && c?.password) {
+          this.saveCredentials(c);
+          console.log('[store] 已从旧版迁移账号');
+        }
+      }
+      const legacyData = path.join(LEGACY_DIR, 'data');
+      if (fs.existsSync(legacyData)) {
+        for (const f of fs.readdirSync(legacyData).filter(f => f.endsWith('.json'))) {
+          const dst = path.join(this.dataDir, f);
+          if (!fs.existsSync(dst)) fs.copyFileSync(path.join(legacyData, f), dst);
+        }
+      }
+    } catch (e) {
+      console.warn('[store] 迁移旧版数据失败:', e);
+    }
+  }
+}

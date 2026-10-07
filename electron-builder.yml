@@ -1,0 +1,24 @@
+appId: com.coursehelper.desktop
+productName: 刷课助手 CourseHelper
+directories:
+  output: release
+files:
+  - app/dist/**/*
+  - app/renderer/**/*
+  - package.json
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.png
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: 刷课助手
+  artifactName: CourseHelper-Setup-${version}.exe
+  uninstallDisplayName: 刷课助手 CourseHelper

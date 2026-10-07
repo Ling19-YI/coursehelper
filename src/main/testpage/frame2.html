@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>spike-frame2</title></head>
+<body style="margin:0;background:#000">
+  <video id="v" src="./test.webm" autoplay muted playsinline style="width:640px;height:360px"></video>
+  <div id="state" style="color:#4ade80;font:14px monospace;padding:6px">starting…</div>
+  <script>
+    const v = document.getElementById('v');
+    function platformPause() { if (!v.paused) v.pause(); }
+    window.addEventListener('blur', platformPause);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) platformPause(); });
+    setInterval(platformPause, 1500);
+    setInterval(function () {
+      document.getElementById('state').textContent =
+        'ct=' + v.currentTime.toFixed(2) + ' paused=' + v.paused + ' rs=' + v.readyState;
+    }, 200);
+  </script>
+</body>
+</html>

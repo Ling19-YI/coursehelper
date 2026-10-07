@@ -1,0 +1,10 @@
+node_modules/
+app/dist/
+app/renderer/
+app/*.png
+test-data/
+tools/keys/
+*.log
+.DS_Store
+dist/
+release/
