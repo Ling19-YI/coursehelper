@@ -8,3 +8,21 @@ tools/keys/
 .DS_Store
 dist/
 release/
+
+# 瀹ｄ紶瑙嗛绱犳潗锛氭埅鍥惧惈鐪熷疄璐﹀彿/璇剧▼淇℃伅锛屼笉鍏ュ簱
+promo/shots/
+promo/frames/
+promo/voice/
+promo/out/
+promo/dl/
+promo/src/narration.sync.json
+
+# 一次性平台探测脚本（含本机路径，不入库）
+scripts/chapter-markers.ts
+scripts/debug-chapters.ts
+scripts/debug-open-chapter.ts
+scripts/doc-experiment.ts
+scripts/doc-scroll-test.ts
+scripts/engine-cli.ts
+scripts/debug-creds.cjs
+scripts/make-png.cjs

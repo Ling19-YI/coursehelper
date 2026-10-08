@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1920px; height:1080px; overflow:hidden; background:#070b14;
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif; color:#e8edf7; }
+  #stage { position:absolute; inset:0; }
+  .bg { position:absolute; inset:0;
+    background:
+      radial-gradient(1100px 700px at 18% 12%, rgba(59,130,246,.30), transparent 60%),
+      radial-gradient(900px 700px at 88% 84%, rgba(124,58,237,.30), transparent 62%),
+      linear-gradient(160deg,#0a1020 0%,#070b14 55%,#0a0f1d 100%);
+  }
+  .grid { position:absolute; inset:0; opacity:.10;
+    background-image:linear-gradient(rgba(148,163,184,.35) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(148,163,184,.35) 1px,transparent 1px);
+    background-size:64px 64px; mask-image:radial-gradient(circle at 50% 45%,#000 30%,transparent 78%); }
+  .vign { position:absolute; inset:0; box-shadow:inset 0 0 260px rgba(0,0,0,.75); }
+  .scene { position:absolute; inset:0; opacity:0; will-change:transform,opacity; }
+  .shotwrap { position:absolute; border-radius:18px; overflow:hidden;
+    box-shadow:0 40px 120px rgba(0,0,0,.65), 0 0 0 1px rgba(148,163,184,.28); }
+  .shotwrap img { display:block; width:100%; height:100%; object-fit:cover; }
+  .redact { position:absolute; backdrop-filter:blur(26px) saturate(.6); background:rgba(20,26,40,.55);
+    border-radius:6px; }
+  .tag { position:absolute; display:inline-flex; align-items:center; gap:10px;
+    padding:12px 22px; border-radius:999px; font-size:26px; font-weight:600;
+    background:rgba(17,24,39,.78); border:1px solid rgba(59,130,246,.45); box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .dot { width:12px; height:12px; border-radius:50%; background:#34d399; box-shadow:0 0 14px #34d399; }
+  h1 { font-size:96px; letter-spacing:2px; }
+  .sub { font-size:34px; color:#a8b6cf; }
+  .kicker { font-size:28px; letter-spacing:8px; color:#7dd3fc; text-transform:uppercase; }
+  .card { background:rgba(15,23,42,.72); border:1px solid rgba(148,163,184,.22);
+    border-radius:22px; backdrop-filter:blur(10px); }
+  .step { display:flex; gap:22px; align-items:center; }
+  .stepnum { width:64px; height:64px; border-radius:18px; display:flex; align-items:center; justify-content:center;
+    font-size:30px; font-weight:800; color:#0b1220; background:linear-gradient(135deg,#60a5fa,#a78bfa); flex:0 0 auto; }
+  #subtitle { position:absolute; left:0; right:0; bottom:64px; text-align:center;
+    font-size:46px; font-weight:700; letter-spacing:1px; opacity:0;
+    text-shadow:0 4px 18px rgba(0,0,0,.9), 0 0 40px rgba(0,0,0,.6); }
+  #subtitle .bar { display:block; width:120px; height:5px; margin:0 auto 20px; border-radius:4px;
+    background:linear-gradient(90deg,#60a5fa,#a78bfa); }
+  .prog { position:absolute; left:0; bottom:0; height:6px; background:linear-gradient(90deg,#3b82f6,#a855f7); }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="subtitle"><span class="bar"></span><span id="subtext"></span></div>
+  <div class="prog" id="prog"></div>
+<script>
+const DUR = 30, FPS = 30;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const ease = p => 1-Math.pow(1-p,3);
+const fade = (p,inT=0.25,outT=0.25)=>clamp(p/inT,0,1)*clamp((1-p)/outT,0,1);
+const S = n => `../shots/${n}.png`;
+const LOGO = `../../build/icon.png`;
+
+/* 场景定义: [起, 止, 渲染函数(局部进度 p, 绝对时间 t)] */
+const scenes = [
+  { t0:0.0, t1:3.2, name:'开场', draw(p,t){
+      const k=ease(p);
+      return `
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px">
+        <img src="${LOGO}" style="width:${120+40*k}px;height:${120+40*k}px;border-radius:34px;box-shadow:0 30px 90px rgba(59,130,246,.5);transform:translateY(${(1-k)*-30}px)"/>
+        <div style="display:flex;align-items:center;gap:24px;opacity:${k}">
+          <span style="font-size:88px;font-weight:800;letter-spacing:2px">刷课助手</span>
+          <span style="font-size:52px;font-weight:700;color:#93c5fd">CourseHelper</span>
+        </div>
+        <div class="sub" style="opacity:${clamp((p-0.25)/0.4,0,1)}">超星学习通自动刷课 · 单窗口内嵌浏览器 · 离线激活</div>
+      </div>`;
+  }},
+  { t0:3.2, t1:6.6, name:'痛点', draw(p){
+      const k=ease(p);
+      const items=['一个一个点章节','一节一节等视频','进度还要手动查','一不小心就挂机'];
+      return `
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:34px">
+        <div class="kicker" style="opacity:${k}">手动刷课的代价</div>
+        <div style="font-size:70px;font-weight:800;text-align:center;line-height:1.3">几十门课、<span style="color:#f87171">上百个任务点</span><br/>全靠手动？</div>
+        <div style="display:flex;gap:22px;margin-top:10px">
+          ${items.map((it,i)=>`<div class="card" style="padding:20px 30px;font-size:28px;color:#cbd5e1;opacity:${clamp((p-0.35-i*0.12)/0.3,0,1)};transform:translateY(${(1-ease(clamp((p-0.35-i*0.12)/0.3,0,1)))*22}px)">
+            <span style="color:#f87171;margin-right:10px">✕</span>${it}</div>`).join('')}
+        </div>
+      </div>`;
+  }},
+  { t0:6.6, t1:11.4, name:'主界面', draw(p,t){
+      const k=ease(p), zoom=1.02+0.05*p, op=fade(p,0.18,0.18);
+      return `
+      <div style="position:absolute;inset:0">
+        <div class="shotwrap" style="left:70px;top:70px;width:1780px;height:940px;opacity:${op};transform:scale(${zoom});transform-origin:50% 50%">
+          <img src="${S('app-1-dashboard')}"/>
+        </div>
+        <div class="tag" style="right:150px;top:150px;opacity:${clamp((p-0.45)/0.3,0,1)}"><span class="dot"></span>真实界面 · 非剪辑特效</div>
+        <div style="position:absolute;left:70px;bottom:6px;font-size:34px;font-weight:700;color:#cbd5e1;opacity:${clamp((p-0.5)/0.3,0,1)}">左边控制台 · 右边真实学习通页面（同一窗口）</div>
+      </div>`;
+  }},
+  { t0:11.4, t1:15.2, name:'选课', draw(p){
+      const op=fade(p,0.2,0.2);
+      return `
+      <div style="position:absolute;inset:0">
+        <div class="shotwrap" style="left:120px;top:80px;width:660px;height:920px;opacity:${op};transform:scale(${1+0.02*p})">
+          <img src="${S('app-2-courses')}" style="object-fit:cover;object-position:0 0"/>
+        </div>
+        <div style="position:absolute;left:900px;top:230px;width:840px">
+          <div style="font-size:56px;font-weight:800;line-height:1.35;opacity:${clamp(p/0.25,0,1)}">一键全选，<br/>29 门课全排上</div>
+          <div style="margin-top:40px;display:flex;flex-direction:column;gap:20px">
+            ${['断点进度一眼可见','平台已完成的自动跳过','只刷没刷的，不浪费时间'].map((s,i)=>`
+              <div style="display:flex;align-items:center;gap:16px;font-size:32px;color:#cbd5e1;opacity:${clamp((p-0.3-i*0.14)/0.3,0,1)}">
+                <span style="width:34px;height:34px;border-radius:50%;background:#22c55e;color:#052e16;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900">✓</span>${s}</div>`).join('')}
+          </div>
+        </div>
+      </div>`;
+  }},
+  { t0:15.2, t1:20.2, name:'运行中', draw(p){
+      const op=fade(p,0.15,0.15), zoom=1.0+0.04*p;
+      return `
+      <div style="position:absolute;inset:0">
+        <div class="shotwrap" style="left:100px;top:80px;width:1720px;height:910px;opacity:${op};transform:scale(${zoom})">
+          <img src="${S('app-4-running')}"/>
+          <div class="redact" style="left:85.3%;top:3.4%;width:13%;height:4.2%"></div>
+          <div class="redact" style="left:50%;top:24.8%;width:11%;height:3.2%"></div>
+        </div>
+        <div style="position:absolute;left:100px;top:24px;display:flex;gap:16px;opacity:${clamp((p-0.5)/0.3,0,1)}">
+          <div class="tag"><span class="dot"></span>运行中</div>
+          <div class="tag">日志实时滚动</div>
+        </div>
+      </div>`;
+  }},
+  { t0:20.2, t1:23.4, name:'省心特性', draw(p){
+      const cards=[
+        ['自动播放守护','视频章节自动播，鼠标移开也不暂停'],
+        ['文档自动滚到底','PDF / 文档任务点滚到底才计进度'],
+        ['断点续跑','关掉重开，接着上次没刷完的继续'],
+        ['随时暂停/停止','日志看得见，心里有底'],
+      ];
+      return `
+      <div style="position:absolute;inset:0;display:grid;grid-template-columns:1fr 1fr;gap:34px;padding:150px 140px;align-content:center">
+        ${cards.map((c,i)=>{
+          const o=clamp((p-0.12*i)/0.28,0,1), e=ease(o);
+          return `<div class="card" style="padding:44px 48px;opacity:${o};transform:translateY(${(1-e)*34}px)">
+            <div style="font-size:38px;font-weight:800;margin-bottom:14px">${c[0]}</div>
+            <div style="font-size:26px;color:#9fb0c9;line-height:1.6">${c[1]}</div></div>`;
+        }).join('')}
+      </div>`;
+  }},
+  { t0:23.4, t1:27.6, name:'安装教程', draw(p){
+      const win = (a,b,f=0.07)=>clamp((p-a)/f,0,1)*clamp((b-p)/f,0,1);
+      const steps=[['1','下载安装包','CourseHelper-Setup-1.0.0.exe'],['2','一路「下一步」','选“仅为我安装”，点安装'],['3','完成，去激活','桌面出现「刷课助手」图标']];
+      return `
+      <div style="position:absolute;inset:0">
+        <div class="shotwrap" style="left:80px;top:250px;width:800px;height:576px;opacity:${win(0.02,0.30)}">
+          <img src="${S('wizard-1')}"/>
+          <div style="position:absolute;inset:0;background:rgba(7,11,20,.20)"></div>
+        </div>
+        <div class="shotwrap" style="left:80px;top:250px;width:800px;height:576px;opacity:${win(0.32,0.57)}">
+          <img src="${S('wizard-3')}"/>
+          <div style="position:absolute;inset:0;background:rgba(7,11,20,.20)"></div>
+        </div>
+        <div class="shotwrap" style="left:80px;top:250px;width:800px;height:576px;opacity:${win(0.59,0.985)}">
+          <img src="${S('wizard-5-finish')}"/>
+          <div style="position:absolute;inset:0;background:rgba(7,11,20,.20)"></div>
+        </div>
+        <div style="position:absolute;left:950px;top:230px;width:900px">
+          <div style="font-size:60px;font-weight:800;margin-bottom:46px;opacity:${clamp(p/0.2,0,1)}">三步装好，不用配置环境</div>
+          <div style="display:flex;flex-direction:column;gap:34px">
+            ${steps.map((s,i)=>{
+              const o=clamp((p-0.18-i*0.16)/0.28,0,1);
+              return `<div class="step" style="opacity:${o};transform:translateX(${(1-ease(o))*30}px)">
+                <div class="stepnum">${s[0]}</div>
+                <div><div style="font-size:34px;font-weight:700">${s[1]}</div>
+                <div style="font-size:24px;color:#8fa0ba;margin-top:6px">${s[2]}</div></div></div>`;
+            }).join('')}
+          </div>
+          <div style="margin-top:44px;padding:22px 28px;border-radius:16px;background:rgba(250,204,21,.10);
+            border:1px solid rgba(250,204,21,.35);font-size:24px;color:#fde68a;opacity:${clamp((p-0.7)/0.25,0,1)};line-height:1.6">
+            提示：首次运行 Windows 可能提示「已保护你的电脑」→ 点「更多信息」→「仍要运行」
+          </div>
+        </div>
+      </div>`;
+  }},
+  { t0:27.6, t1:30.0, name:'激活+CTA', draw(p){
+      const k=ease(clamp(p/0.4,0,1));
+      return `
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px">
+        <div style="display:flex;align-items:center;gap:20px;opacity:${k}">
+          <img src="${LOGO}" style="width:96px;height:96px;border-radius:26px"/>
+          <span style="font-size:66px;font-weight:800">刷课助手 CourseHelper</span>
+        </div>
+        <div class="card" style="padding:34px 54px;opacity:${clamp((p-0.25)/0.3,0,1)};text-align:center">
+          <div style="font-size:30px;color:#93c5fd;margin-bottom:14px">离线激活码 · 一码一机 · 永久可用</div>
+          <div style="font-family:Consolas,monospace;font-size:30px;color:#a7f3d0">CH1.eyJpZCI6IkExQjkifQ.xxxxxxxx</div>
+        </div>
+        <div style="font-size:34px;color:#cbd5e1;opacity:${clamp((p-0.5)/0.3,0,1)}">下载 · 官网 / GitHub Releases</div>
+        <div style="font-size:22px;color:#64748b;opacity:${clamp((p-0.72)/0.25,0,1)}">本工具仅供学习与技术研究使用，请遵守平台与学校规定</div>
+      </div>`;
+  }},
+];
+
+/* 字幕数据由构建脚本注入（window.NARRATION），来源与配音完全一致 */
+window.NARRATION = window.NARRATION || [];
+
+window.seek = function(t){
+  const stage = document.getElementById('stage');
+  const cur = scenes.find(s=> t>=s.t0 && t<s.t1) || scenes[scenes.length-1];
+  const p = clamp((t-cur.t0)/(cur.t1-cur.t0),0,1);
+  stage.innerHTML = `<div class="bg"></div><div class="grid"></div>
+    <div class="scene" style="opacity:1">${cur.draw(p,t)}</div><div class="vign"></div>`;
+  const sub = window.NARRATION.find(s=> t>=s.t0 && t<=s.t1);
+  const subEl = document.getElementById('subtitle');
+  const txt = document.getElementById('subtext');
+  if (sub) {
+    const sp = (t-sub.t0)/0.22, ep = (sub.t1-t)/0.3;
+    subEl.style.opacity = clamp(sp,0,1)*clamp(ep,0,1);
+    txt.textContent = sub.text;
+  } else subEl.style.opacity = 0;
+  document.getElementById('prog').style.width = (t/DUR*100)+'%';
+  return cur.name;
+};
+window.seek(0);
+</script>
+</body>
+</html>

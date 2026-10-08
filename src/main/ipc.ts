@@ -8,8 +8,7 @@ import type { Course, EngineEvent } from '../shared/types';
 import type { AppInfo, ActivateResult, LicenseInfo } from '../shared/api';
 import { activate as activateCode, getLicenseInfo, getMachineId } from './licensing';
 import { ProgressStore } from './engine/progress';
-
-const LEGACY_DIR = 'C:\\Users\\colorful\\Documents\\Default Project\\-';
+import { legacyDirCandidates } from './store';
 
 const pkgVersion = () => {
   try {
@@ -139,7 +138,7 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
     const settings = store.settings;
     let legacy = false;
     try {
-      legacy = fs.existsSync(path.join(LEGACY_DIR, 'credentials.json'));
+      legacy = legacyDirCandidates().some(d => fs.existsSync(path.join(d, 'credentials.json')));
     } catch {}
     return { version: pkgVersion(), userData: store.userData, dataDir: settings.dataDir, legacy };
   });

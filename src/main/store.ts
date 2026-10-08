@@ -1,9 +1,35 @@
 import { app, safeStorage } from 'electron';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { DEFAULT_SETTINGS, type AppSettings, type Credentials } from '../shared/types';
 
-const LEGACY_DIR = 'C:\\Users\\colorful\\Documents\\Default Project\\-';
+/**
+ * 旧版命令行版本的数据目录（用于一次性迁移账号与课程进度）。
+ * 可用环境变量 COURSEHELPER_LEGACY_DIR 指定；默认在当前用户目录下按常见位置查找。
+ */
+export function legacyDirCandidates(): string[] {
+  const env = process.env.COURSEHELPER_LEGACY_DIR;
+  const home = os.homedir();
+  const list = [
+    ...(env ? [env] : []),
+    path.join(home, 'Documents', 'Default Project', '-'),
+    path.join(home, 'Documents', '刷课', '-'),
+    path.join(home, 'Desktop', '-'),
+  ];
+  return [...new Set(list)];
+}
+
+function firstExistingLegacy(): string | null {
+  for (const dir of legacyDirCandidates()) {
+    try {
+      if (fs.existsSync(path.join(dir, 'credentials.json')) || fs.existsSync(path.join(dir, 'data'))) {
+        return dir;
+      }
+    } catch {}
+  }
+  return null;
+}
 
 function readJson<T>(file: string): T | null {
   try {
@@ -82,7 +108,9 @@ export class Store {
   /** 从旧命令行版本迁移凭证与进度（一次性） */
   private migrateLegacy() {
     try {
-      const legacyCreds = path.join(LEGACY_DIR, 'credentials.json');
+      const legacyRoot = firstExistingLegacy();
+      if (!legacyRoot) return;
+      const legacyCreds = path.join(legacyRoot, 'credentials.json');
       if (!fs.existsSync(this.credsFile) && fs.existsSync(legacyCreds)) {
         const c = readJson<Credentials>(legacyCreds);
         if (c?.username && c?.password) {
@@ -90,7 +118,7 @@ export class Store {
           console.log('[store] 已从旧版迁移账号');
         }
       }
-      const legacyData = path.join(LEGACY_DIR, 'data');
+      const legacyData = path.join(legacyRoot, 'data');
       if (fs.existsSync(legacyData)) {
         for (const f of fs.readdirSync(legacyData).filter(f => f.endsWith('.json'))) {
           const dst = path.join(this.dataDir, f);
