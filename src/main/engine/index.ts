@@ -194,6 +194,28 @@ export class ChaoxingEngine {
           return progress as CourseProgress;
         };
 
+        // 平台侧完成标记（用户此前手动刷过的章节）→ 合并进本地进度
+        // 平台任务点只在整门课维度给出 X/Y，章节维度只能靠 icon_yiwanc 标记
+        const platformDone = todoable.filter(c => c.isCompleted);
+        if (platformDone.length) {
+          const p = ensureProgress();
+          let added = 0;
+          for (const c of platformDone) {
+            if (!p.completedChapters.includes(c.onclick)) {
+              p.completedChapters.push(c.onclick);
+              added++;
+            }
+          }
+          if (added) {
+            p.lastChapter = platformDone[platformDone.length - 1].onclick;
+            this.store.save(p);
+          }
+          this.log(
+            'ok',
+            `✓ 平台标记已完成 ${platformDone.length} 个章节（含手动刷过）${added ? `，新增记录 ${added} 个` : ''}`
+          );
+        }
+
         let startIdx = 0;
         if (options.resume) {
           let firstUn = -1;
@@ -208,8 +230,8 @@ export class ChaoxingEngine {
           this.log(
             'info',
             startIdx < chapters.length
-              ? `→ 从第 ${startIdx + 1} 节开始（断点续跑）`
-              : '→ 本地记录已全部处理过，做收尾检查'
+              ? `→ 从第 ${startIdx + 1} 节开始（断点续跑；已跳过 ${doneHere()} 个完成章节）`
+              : '→ 已完成章节已全部处理，做收尾检查'
           );
         } else {
           this.log('info', '→ 从第 1 节开始（全部重刷）');

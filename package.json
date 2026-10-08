@@ -1,7 +1,7 @@
 {
   "name": "coursehelper",
   "productName": "刷课助手 CourseHelper",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "超星学习通自动刷课助手",
   "main": "app/dist/main/index.js",
   "license": "UNLICENSED",
@@ -11,7 +11,6 @@
     "build": "node scripts/build.mjs && vite build",
     "typecheck": "tsc --noEmit",
     "dist": "npm run build && electron-builder",
-    "issue-code": "tsx tools/issue-code.ts",
     "smoke": "node scripts/smoke.mjs",
     "spike": "node scripts/spike.mjs"
   },

@@ -1,6 +1,6 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { AppSettings, Course, CourseProgress, EngineEvent, TaskState } from '../shared/types';
-import type { ActivateResult, AppInfo, LicenseInfo } from '../shared/api';
+import type { AppInfo } from '../shared/api';
 
 export interface LogEntry {
   ts: number;
@@ -14,9 +14,6 @@ export interface PlatformProgress {
 }
 
 export interface AppCtxType {
-  licensed: LicenseInfo | null | undefined;
-  doActivate: (code: string) => Promise<ActivateResult>;
-  machineId: string;
   info: AppInfo | null;
   settings: AppSettings | null;
   saveSettings: (patch: Partial<AppSettings>) => Promise<AppSettings>;
@@ -45,7 +42,6 @@ export interface AppCtxType {
   stop: () => void;
   page: string;
   setPage: (p: string) => void;
-  refreshLicense: () => Promise<void>;
 }
 
 const Ctx = createContext<AppCtxType>(null as unknown as AppCtxType);
@@ -54,8 +50,6 @@ export const useApp = () => useContext(Ctx);
 const ch = () => window.ch;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const [licensed, setLicensed] = useState<LicenseInfo | null | undefined>(undefined);
-  const [machineId, setMachineId] = useState('');
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [username, setUsername] = useState<string | null>(null);
@@ -72,19 +66,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [summary, setSummary] = useState({ completed: 0, skipped: 0 });
   const [page, setPage] = useState('dashboard');
-  const refreshLicenseRef = useRef<() => Promise<void>>(() => Promise.resolve());
-
-  const refreshLicense = useCallback(async () => {
-    setLicensed(await ch().licenseInfo());
-    setMachineId(await ch().machineId());
-  }, []);
-  refreshLicenseRef.current = refreshLicense;
 
   const refreshCourses = useCallback(async () => {
     setLoadingCourses(true);
     try {
-      const list = await ch().listCourses();
-      setCourses(list);
+      setCourses(await ch().listCourses());
     } finally {
       setLoadingCourses(false);
     }
@@ -129,24 +115,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      const [lic, mid, st, u, inf, prog, gst] = await Promise.all([
-        ch().licenseInfo(),
-        ch().machineId(),
+      const [st, u, inf, prog, gst] = await Promise.all([
         ch().getSettings(),
         ch().getUsername(),
         ch().getAppInfo(),
         ch().getProgress(),
         ch().getState(),
       ]);
-      setLicensed(lic);
-      setMachineId(mid);
       setSettings(st);
       setUsername(u);
       setInfo(inf);
       setStoredProg(prog);
       setEngineState(gst.state);
     })().catch(e => {
-      setLicensed(null);
       setLogs([{ ts: Date.now(), level: 'error', msg: String(e) }]);
     });
     return ch().onEngineEvent(onEvent);
@@ -157,12 +138,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSettings(next);
     return next;
   }, []);
-
-  const doActivate = useCallback(async (code: string) => {
-    const res = await ch().activate(code);
-    if (res.ok) await refreshLicense();
-    return res;
-  }, [refreshLicense]);
 
   const saveCredentials = useCallback(async (u: string, p: string) => {
     await ch().setCredentials(u, p);
@@ -179,9 +154,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, [selected, resume]);
 
   const value: AppCtxType = {
-    licensed,
-    doActivate,
-    machineId,
     info,
     settings,
     saveSettings,
@@ -216,7 +188,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     stop: () => window.ch.stop(),
     page,
     setPage,
-    refreshLicense,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -5,8 +5,7 @@ import { ChaoxingEngine } from './engine';
 import type { Store } from './store';
 import type { Session } from './session';
 import type { Course, EngineEvent } from '../shared/types';
-import type { AppInfo, ActivateResult, LicenseInfo } from '../shared/api';
-import { activate as activateCode, getLicenseInfo, getMachineId } from './licensing';
+import type { AppInfo } from '../shared/api';
 import { ProgressStore } from './engine/progress';
 import { legacyDirCandidates } from './store';
 
@@ -26,12 +25,6 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
   const emit = (e: EngineEvent) => {
     if (e.type === 'courses') cachedCourses = e.courses;
     getWindow()?.webContents.send('engine:event', e);
-  };
-
-  const requireLicense = () => {
-    if (app.isPackaged && !getLicenseInfo(app.getPath('userData'))) {
-      throw new Error('软件未激活，请先在激活页输入激活码');
-    }
   };
 
   async function getEngine(): Promise<ChaoxingEngine> {
@@ -64,7 +57,6 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
   });
 
   ipcMain.handle('engine:start', async (_ev, courseIds: string[], resume: boolean) => {
-    requireLicense();
     const creds = requireCreds();
     const e = await getEngine();
     if (e.isRunning) throw new Error('已有任务在运行');
@@ -126,13 +118,6 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
     store.clearCredentials();
     return true;
   });
-
-  ipcMain.handle('license:activate', (_ev, code: string): ActivateResult => {
-    const res = activateCode(code, app.getPath('userData'));
-    return res;
-  });
-  ipcMain.handle('license:info', (): LicenseInfo | null => getLicenseInfo(app.getPath('userData')));
-  ipcMain.handle('license:machineId', () => getMachineId());
 
   ipcMain.handle('app:info', (): AppInfo => {
     const settings = store.settings;

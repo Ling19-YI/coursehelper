@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import * as path from 'node:path';
 
 /**
  * 冒烟测试：启动 Electron 主进程（占位 renderer），验证
- * preload contextBridge、IPC 三个通道（app:info / license:info / settings:get）、
+ * preload contextBridge、IPC 通道（app:info / settings:get）、
  * 以及 CDP 端口 9333 可连接。
  */
 const require = createRequire(import.meta.url);
@@ -20,18 +20,27 @@ if (!existsSync(mainJs)) {
 
 const rendererDir = path.join(root, 'app', 'renderer');
 mkdirSync(rendererDir, { recursive: true });
+const realIndex = path.join(rendererDir, 'index.html');
+// 备份真实 UI（smoke 用占位页，结束后必须还原，否则后续运行会看到空白页）
+const backup = existsSync(realIndex) ? readFileSync(realIndex) : null;
 writeFileSync(
-  path.join(rendererDir, 'index.html'),
+  realIndex,
   `<!doctype html><meta charset="utf-8"><body><script>
 try {
   window.ch.getAppInfo().then(async info => {
-    const lic = await window.ch.licenseInfo();
     const st = await window.ch.getSettings();
-    document.title = 'SMOKE_OK ' + JSON.stringify({ v: info.version, legacy: !!info.legacy, lic: !!lic, dd: !!st.dataDir });
+    document.title = 'SMOKE_OK ' + JSON.stringify({ v: info.version, legacy: !!info.legacy, dd: !!st.dataDir });
   }).catch(e => { document.title = 'SMOKE_ERR ' + e.message; });
 } catch (e) { document.title = 'SMOKE_ERR ' + e.message; }
 </script></body>`
 );
+const restore = () => {
+  try {
+    if (backup) writeFileSync(realIndex, backup);
+    else rmSync(realIndex, { force: true });
+  } catch {}
+};
+process.on('exit', restore);
 
 const child = spawn(electronExe, [mainJs], {
   stdio: ['ignore', 'pipe', 'pipe'],

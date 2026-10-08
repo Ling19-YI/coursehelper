@@ -8,7 +8,6 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import { AppProvider, useApp } from './state';
-import Activate from './pages/Activate';
 import Dashboard from './pages/Dashboard';
 import Courses from './pages/Courses';
 import Monitor from './pages/Monitor';
@@ -36,26 +35,10 @@ const PAGES: Record<string, React.ReactNode> = {
   monitor: <Monitor />,
   settings: <SettingsPage />,
   about: <About />,
-  activate: <Activate />,
 };
 
 function Shell() {
-  const { licensed, page, setPage, engineState } = useApp();
-
-  if (licensed === undefined) {
-    return (
-      <div className="center-box">
-        <Spin size="large" />
-      </div>
-    );
-  }
-  if (licensed === null) {
-    return (
-      <div className="center-box">
-        <Activate standalone />
-      </div>
-    );
-  }
+  const { page, setPage, engineState } = useApp();
 
   const meta = stateMeta(engineState);
   return (
@@ -66,14 +49,8 @@ function Shell() {
           刷课助手 CourseHelper
         </div>
         <div className="row">
+          <Tag color="green">免费版</Tag>
           <Tag color={meta.color}>{meta.text}</Tag>
-          <Tag
-            color="blue"
-            style={{ cursor: 'pointer' }}
-            onClick={() => setPage('activate')}
-          >
-            已激活
-          </Tag>
         </div>
       </div>
       <Menu

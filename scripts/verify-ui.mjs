@@ -6,10 +6,10 @@ import * as path from 'node:path';
 /**
  * 端到端验证:
  *  1. 启动正式构建的 Electron 主进程
- *  2. 首屏应为激活页 → 截图
- *  3. 生成激活码并调用 window.ch.activate → 应进入任务页 → 截图
- *  4. window.ch.listCourses() 真实登录超星 → 返回课程列表
- *  5. 切到「课程」页截图
+ *  1. 启动后首屏应直接是任务页（免费版无激活页）→ 截图
+ *  2. 关于页应包含微信收款码
+ *  3. window.ch.listCourses() 真实登录超星 → 返回课程列表
+ *  4. 逐页截图
  */
 const require = createRequire(import.meta.url);
 const root = process.cwd();
@@ -23,16 +23,6 @@ if (!existsSync(mainJs) || !existsSync(path.join(root, 'app', 'renderer', 'index
   process.exit(1);
 }
 
-// 每次都从「未激活」开始，走完整激活流程（保留 credentials.enc 以验证解密往返）
-const licenseFile = path.join(process.env.APPDATA, '刷课助手 CourseHelper', 'license.json');
-try {
-  const fs = await import('node:fs');
-  if (fs.existsSync(licenseFile)) {
-    fs.unlinkSync(licenseFile);
-    console.log('[0] 已清除旧 license.json（credentials.enc 保留）');
-  }
-} catch {}
-
 let child = null;
 let browser = null;
 const fail = msg => {
@@ -41,22 +31,6 @@ const fail = msg => {
   try { if (child) child.kill(); } catch {}
   process.exit(1);
 };
-
-// 生成激活码
-let code = '';
-try {
-  const out = execFileSync('npx', ['tsx', 'tools/issue-code.ts'], {
-    cwd: root,
-    encoding: 'utf-8',
-    shell: true,
-  });
-  const m = out.match(/CH1\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/);
-  if (!m) fail('发码脚本未输出激活码:\n' + out);
-  code = m[0];
-} catch (e) {
-  fail('发码失败: ' + e.message);
-}
-console.log('[1] 激活码已生成');
 
 child = spawn(electronExe, [mainJs], { stdio: ['ignore', 'pipe', 'pipe'] });
 let log = '';
@@ -88,38 +62,31 @@ appPage.on('console', m => {
   if (m.type() === 'error') console.log('[console.error]', m.text());
 });
 
-// 首屏：未激活→激活页；已激活→任务页
-const codeInput = appPage.locator('input[placeholder*="CH1"]');
-let onActivate = true;
+// 首屏应直接进入任务页（免费版，无激活页）
 try {
-  await appPage.waitForSelector('input[placeholder*="CH1"]', { timeout: 15000 });
+  await appPage.waitForSelector('text=开始刷课', { timeout: 25000 });
 } catch {
-  onActivate = false;
+  const t = await appPage.evaluate(() => document.body.innerText);
+  await appPage.screenshot({ path: path.join(shotDir, 'ui-2a-fail.png') });
+  fail('首屏未进入任务页, body=' + JSON.stringify(t.slice(0, 400)));
 }
-
-if (onActivate) {
-  await appPage.screenshot({ path: path.join(shotDir, 'ui-1-activate.png') });
-  console.log('[2] 激活页截图 ui-1-activate.png');
-  await codeInput.fill(code);
-  await appPage.locator('.ant-btn-primary').click();
-  console.log('[3] 已点击激活按钮');
-  try {
-    await appPage.waitForSelector('text=开始刷课', { timeout: 20000 });
-  } catch {
-    const t = await appPage.evaluate(() => document.body.innerText);
-    await appPage.screenshot({ path: path.join(shotDir, 'ui-2a-fail.png') });
-    fail('激活后未进入任务页, body=' + JSON.stringify(t.slice(0, 400)));
-  }
-  console.log('[3] 激活成功，已切换任务页');
-} else {
-  console.log('[2] 已是激活状态（license.json 存在）');
-}
+console.log('[1] 首屏直接进入任务页（免费版，无激活页）');
 
 await appPage.screenshot({ path: path.join(shotDir, 'ui-2-dashboard.png') });
-console.log('[4] 任务页截图 ui-2-dashboard.png');
+console.log('[2] 任务页截图 ui-2-dashboard.png');
+
+// 「关于」页应包含支持作者收款码
+await appPage.getByText('关于', { exact: true }).click();
+await sleep(700);
+const hasQr = await appPage.locator('img[alt="微信收款码"]').count();
+console.log('[3] 关于页收款码数量:', hasQr);
+await appPage.screenshot({ path: path.join(shotDir, 'ui-6-about.png') });
+if (!hasQr) fail('关于页缺少微信收款码');
+await appPage.getByText('任务', { exact: true }).click();
+await sleep(500);
 
 // 真实拉取课程列表（内嵌视图登录）
-console.log('[5] 正在登录超星并拉取课程列表…');
+console.log('[4] 正在登录超星并拉取课程列表…');
 let courses = [];
 try {
   courses = await appPage.evaluate(() => window.ch.listCourses());
@@ -136,19 +103,19 @@ if (!courses.length) {
 await appPage.getByText('课程', { exact: true }).click();
 await sleep(800);
 await appPage.screenshot({ path: path.join(shotDir, 'ui-3-courses.png') });
-console.log('[6] 课程页截图 ui-3-courses.png');
+console.log('[5] 课程页截图 ui-3-courses.png');
 
 // 设置页
 await appPage.getByText('设置', { exact: true }).click();
 await sleep(500);
 await appPage.screenshot({ path: path.join(shotDir, 'ui-4-settings.png') });
-console.log('[7] 设置页截图 ui-4-settings.png');
+console.log('[6] 设置页截图 ui-4-settings.png');
 
 // 日志页
 await appPage.getByText('日志', { exact: true }).click();
 await sleep(300);
 await appPage.screenshot({ path: path.join(shotDir, 'ui-5-monitor.png') });
-console.log('[8] 日志页截图 ui-5-monitor.png');
+console.log('[7] 日志页截图 ui-5-monitor.png');
 
 await browser.close().catch(() => {});
 child.kill();

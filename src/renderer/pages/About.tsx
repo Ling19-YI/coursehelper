@@ -1,5 +1,6 @@
 import { Alert, Descriptions, Tag, Typography } from 'antd';
 import { useApp } from '../state';
+import donateQr from '../donate.jpg';
 
 export default function About() {
   const a = useApp();
@@ -8,8 +9,9 @@ export default function About() {
       <div className="cardish">
         <b>刷课助手 CourseHelper</b>
         <Descriptions column={1} size="small" style={{ marginTop: 10 }}>
-          <Descriptions.Item label="版本">
-            v{a.info?.version ?? '—'}
+          <Descriptions.Item label="版本">v{a.info?.version ?? '—'}</Descriptions.Item>
+          <Descriptions.Item label="价格">
+            <Tag color="green">完全免费 · 无需激活码</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="内嵌浏览器">
             Electron WebContentsView + CDP（无需另装浏览器）
@@ -18,14 +20,26 @@ export default function About() {
             <Tag color="blue">超星学习通</Tag>
             <Tag>更多平台规划中</Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="授权状态">
-            {a.licensed ? (
-              <Tag color="success">已激活 · {a.licensed.codeId}</Tag>
-            ) : (
-              <Tag color="warning">未激活</Tag>
-            )}
-          </Descriptions.Item>
         </Descriptions>
+      </div>
+
+      <div className="cardish" style={{ textAlign: 'center' }}>
+        <b style={{ fontSize: 18 }}>支持作者（自愿）</b>
+        <div className="muted" style={{ margin: '8px 0 14px' }}>
+          这个工具完全免费、不收任何费用。如果你觉得有用，可以请作者喝杯奶茶❤
+        </div>
+        <img
+          src={donateQr}
+          alt="微信收款码"
+          style={{
+            height: 220,
+            borderRadius: 10,
+            border: '1px solid rgba(148,163,184,.25)',
+          }}
+        />
+        <div className="muted" style={{ marginTop: 10 }}>
+          长按 / 扫码自愿支持，不支持也完全不影响使用
+        </div>
       </div>
 
       <Alert
@@ -51,7 +65,7 @@ export default function About() {
 
       <div style={{ marginTop: 14 }}>
         <Typography.Text className="muted" type="secondary">
-          机器码：{a.machineId}
+          反馈问题或功能建议，欢迎在 GitHub 仓库提 Issue。
         </Typography.Text>
       </div>
     </div>

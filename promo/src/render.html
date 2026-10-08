@@ -178,20 +178,30 @@ const scenes = [
         </div>
       </div>`;
   }},
-  { t0:27.6, t1:30.0, name:'激活+CTA', draw(p){
-      const k=ease(clamp(p/0.4,0,1));
+  { t0:27.6, t1:30.0, name:'致谢', draw(p){
+      const k=ease(clamp(p/0.35,0,1));
+      const qr=clamp((p-0.12)/0.25,0,1);
       return `
-      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px">
-        <div style="display:flex;align-items:center;gap:20px;opacity:${k}">
-          <img src="${LOGO}" style="width:96px;height:96px;border-radius:26px"/>
-          <span style="font-size:66px;font-weight:800">刷课助手 CourseHelper</span>
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:90px">
+        <div style="text-align:center">
+          <div style="display:flex;align-items:center;gap:20px;opacity:${k}">
+            <img src="${LOGO}" style="width:86px;height:86px;border-radius:24px"/>
+            <span style="font-size:58px;font-weight:800">刷课助手 CourseHelper</span>
+          </div>
+          <div style="font-size:40px;font-weight:700;color:#a7f3d0;margin-top:34px;opacity:${clamp((p-0.2)/0.25,0,1)}">完全免费 · 无需激活码</div>
+          <div style="font-size:30px;color:#cbd5e1;margin-top:26px;line-height:1.7;opacity:${clamp((p-0.35)/0.3,0,1)}">
+            如果它帮你省下了时间<br/>可以请作者喝杯奶茶 ❤
+          </div>
+          <div style="font-size:22px;color:#64748b;margin-top:28px;opacity:${clamp((p-0.7)/0.25,0,1)}">
+            官网 / GitHub Releases 获取<br/>本工具仅供学习与技术研究，请遵守平台与学校规定
+          </div>
         </div>
-        <div class="card" style="padding:34px 54px;opacity:${clamp((p-0.25)/0.3,0,1)};text-align:center">
-          <div style="font-size:30px;color:#93c5fd;margin-bottom:14px">离线激活码 · 一码一机 · 永久可用</div>
-          <div style="font-family:Consolas,monospace;font-size:30px;color:#a7f3d0">CH1.eyJpZCI6IkExQjkifQ.xxxxxxxx</div>
+        <div style="text-align:center;opacity:${qr};transform:scale(${0.92+0.08*qr})">
+          <div class="cardish" style="padding:26px 26px 18px;background:#fff;border-radius:22px">
+            <img src="../assets/donate.jpg" style="width:320px;display:block;border-radius:12px"/>
+          </div>
+          <div style="margin-top:16px;font-size:22px;color:#94a3b8">微信扫码 · 自愿支持</div>
         </div>
-        <div style="font-size:34px;color:#cbd5e1;opacity:${clamp((p-0.5)/0.3,0,1)}">下载 · 官网 / GitHub Releases</div>
-        <div style="font-size:22px;color:#64748b;opacity:${clamp((p-0.72)/0.25,0,1)}">本工具仅供学习与技术研究使用，请遵守平台与学校规定</div>
       </div>`;
   }},
 ];

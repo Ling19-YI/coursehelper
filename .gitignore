@@ -26,3 +26,8 @@ scripts/doc-scroll-test.ts
 scripts/engine-cli.ts
 scripts/debug-creds.cjs
 scripts/make-png.cjs
+
+# 平台探测报告（含真实课程名）
+promo/probe-report.json
+scripts/probe-manual.ts
+scripts/verify-resume.ts

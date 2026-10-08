@@ -40,18 +40,13 @@
 └──────────────────────────────┘
 ```
 
-## 激活说明
+## 支持作者（自愿）
 
-1. 安装并打开软件，复制激活页上的**本机机器码**（24 位字符）
-2. 付款并把机器码发给客服
-3. 收到 `CH1.` 开头的激活码，粘贴进软件点击「激活」即可
-
-- 激活码与机器码绑定，一码一机
-- 换电脑 / 重装系统前请联系客服解绑
+本工具**完全免费、无需激活码**。如果你觉得有用，欢迎在软件「关于」页扫码请作者喝杯奶茶；不支持也完全不影响使用。
 
 ## 使用说明（快速上手）
 
-1. 打开软件 → 左侧「设置」填写超星账号密码 → 保存
+1. 打开软件（无需激活）→ 左侧「设置」填写超星账号密码 → 保存
 2. 「课程」页点「刷新课程」→ 勾选课程
 3. 「任务」页点「开始刷课」→「日志」页看实时进度
 4. 支持暂停 / 继续 / 停止，进度自动保存，下次从断点继续
@@ -63,8 +58,8 @@
 ## 发布检查清单（维护者）
 
 - [ ] `npm run typecheck` 通过
-- [ ] `npm run dist` 产出 `release/CourseHelper-Setup-1.0.0.exe`
-- [ ] 记录 SHA256：`Get-FileHash release\CourseHelper-Setup-1.0.0.exe -Algorithm SHA256`
-- [ ] 干净虚拟机：安装 → 激活 → 拉课程 → 跑一门 → 卸载
-- [ ] GitHub Release 附安装包 + SHA256 + 本页 SmartScreen 说明
-- [ ] 用于发码的 `tools/keys/private.pem` 已备份且不在仓库内
+- [ ] `npm run typecheck && npm run smoke && node scripts/verify-ui.mjs && node scripts/verify-installer.mjs` 全绿
+- [ ] `npm run dist` 产出 `release/CourseHelper-Setup-<版本>.exe`
+- [ ] 记录 SHA256：`Get-FileHash release\CourseHelper-Setup-<版本>.exe -Algorithm SHA256`
+- [ ] 干净虚拟机：安装 → 拉课程 → 跑一门 → 卸载
+- [ ] GitHub Release 附安装包 + 宣传视频 + SHA256 + 本页 SmartScreen 说明

@@ -20,9 +20,6 @@ const api: Api = {
   getUsername: () => ipcRenderer.invoke('credentials:get'),
   setCredentials: (username, password) => ipcRenderer.invoke('credentials:set', username, password),
   clearCredentials: () => ipcRenderer.invoke('credentials:clear'),
-  activate: code => ipcRenderer.invoke('license:activate', code),
-  licenseInfo: () => ipcRenderer.invoke('license:info'),
-  machineId: () => ipcRenderer.invoke('license:machineId'),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
 };
 

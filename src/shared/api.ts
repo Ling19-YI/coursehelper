@@ -1,17 +1,5 @@
 import type { AppSettings, Course, CourseProgress, EngineEvent, TaskState } from './types';
 
-export interface LicenseInfo {
-  codeId: string;
-  activatedAt: number;
-  machineId: string;
-}
-
-export interface ActivateResult {
-  ok: boolean;
-  message: string;
-  info?: LicenseInfo;
-}
-
 export interface AppInfo {
   version: string;
   userData: string;
@@ -33,9 +21,6 @@ export interface Api {
   getUsername(): Promise<string | null>;
   setCredentials(username: string, password: string): Promise<void>;
   clearCredentials(): Promise<void>;
-  activate(code: string): Promise<ActivateResult>;
-  licenseInfo(): Promise<LicenseInfo | null>;
-  machineId(): Promise<string>;
   getAppInfo(): Promise<AppInfo>;
 }
 

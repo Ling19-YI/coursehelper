@@ -9,7 +9,7 @@ export default function Courses() {
   const { message } = App.useApp();
 
   useEffect(() => {
-    if (!a.courses && a.username && a.licensed) {
+    if (!a.courses && a.username) {
       a.refreshCourses().catch(e =>
         message.error(String((e as Error)?.message || e))
       );

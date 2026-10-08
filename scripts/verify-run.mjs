@@ -12,10 +12,9 @@ const require = createRequire(import.meta.url);
 const root = process.cwd();
 const electronExe = require('electron');
 const mainJs = path.join(root, 'app', 'dist', 'main', 'index.js');
-const licenseFile = path.join(process.env.APPDATA, '刷课助手 CourseHelper', 'license.json');
 
-if (!existsSync(mainJs) || !existsSync(licenseFile)) {
-  console.error('需要: npm run build 且已激活（先跑 verify-ui.mjs）');
+if (!existsSync(mainJs)) {
+  console.error('请先运行: npm run build');
   process.exit(1);
 }
 
