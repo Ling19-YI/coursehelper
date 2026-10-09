@@ -164,7 +164,15 @@ export async function getCourses(page: Page, h: EngineHooks): Promise<Course[]> 
   h.log('info', '[2/4] 获取课程列表（我学的课）...');
 
   // 先进入课表页：接口与页面解析都在这个域下执行（同源，接口不会被 CORS 拦）
-  await page.goto(COURSE_LIST_URL, { timeout: 30000 });
+  try {
+    await page.goto(COURSE_LIST_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    if (/Timeout/i.test(msg)) {
+      throw new Error('连接学习通超时（网络被拦截或校园网限制）。请尝试：换手机热点 / 关闭代理与防火墙 / 重开软件后重试');
+    }
+    throw new Error(`无法打开课表页：${msg.slice(0, 60)}`);
+  }
   await h.ctl.sleep(3000);
 
   let list: RawCourse[] = [];
@@ -207,12 +215,64 @@ export async function getCourses(page: Page, h: EngineHooks): Promise<Course[]> 
   return result;
 }
 
+/** 判断当前会话是否已登录（访问受保护页面，看是否被弹回 passport2） */
+async function alreadyLoggedIn(page: Page): Promise<boolean> {
+  try {
+    await page.goto('https://i.mooc.chaoxing.com/space/index', {
+      waitUntil: 'domcontentloaded',
+      timeout: 20000,
+    });
+    await page.waitForTimeout(1500);
+    const u = page.url();
+    if (u.includes('passport2') || u.includes('/login')) return false;
+    // 登录后才会出现的元素
+    const ok = await page
+      .locator('#nav_schedule, #nav_course, .nav_content, [class*="nav_content"], #mySpace')
+      .count()
+      .catch(() => 0);
+    if (ok > 0) return true;
+    const bodyLen = await page.evaluate(() => (document.body?.innerText || '').length).catch(() => 0);
+    return bodyLen > 40;
+  } catch {
+    return false;
+  }
+}
+
 export async function login(page: Page, h: EngineHooks, username: string, password: string): Promise<boolean> {
+  // 关键：若平台会话仍然有效，登录页会直接跳转且不存在 #phone 输入框，
+  // 此时继续等表单只会白等 30s 并抛 TimeoutError（表现为「卡在登录中」）。
+  h.log('info', '[1/4] 检查登录状态...');
+  if (await alreadyLoggedIn(page)) {
+    h.log('ok', '✓ 学习通已处于登录状态，无需重新登录');
+    return true;
+  }
+
   h.log('info', '[1/4] 登录中...');
-  await page.goto(LOGIN_URL, { timeout: 30000 });
-  await h.ctl.sleep(3000);
-  await page.locator('#phone').fill(username);
-  await page.locator('#pwd').fill(password);
+  try {
+    await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    if (/Timeout/i.test(msg)) {
+      throw new Error('连接学习通登录页超时（网络被拦截）。请换手机热点或关闭代理后重试');
+    }
+    throw new Error(`无法打开登录页：${msg.slice(0, 60)}`);
+  }
+  await h.ctl.sleep(2500);
+
+  // 兜底：跳转过程中若被平台直接登入，同样视为成功
+  if (!page.url().includes('passport2')) {
+    h.log('ok', '✓ 登录成功');
+    return true;
+  }
+
+  const phone = page.locator('#phone');
+  if (!(await phone.count().catch(() => 0))) {
+    throw new Error('未找到账号输入框（登录页结构异常或被网络劫持），请退出学习通登录后重试');
+  }
+
+  await phone.fill(username, { timeout: 10000 });
+  await page.locator('#pwd').fill(password, { timeout: 10000 });
+
   // 登录页要求先勾选《隐私政策》《用户协议》，否则点登录无任何反应（不跳转不报错）
   const agree = page.locator('.check-input, .checkbox, [class*="check-input"]').first();
   if (await agree.count().catch(() => 0)) {
