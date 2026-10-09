@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page, Frame } from 'playwright';
 
 /** 一次截图的结果 */
 export interface QuizShot {
@@ -79,16 +79,30 @@ async function shoot(fn: () => Promise<Buffer>, attempts = 3): Promise<Buffer | 
   return null;
 }
 
+/** Page 与 Frame 通用：Frame 没有 viewportSize() */
+type ShootTarget = Page | Frame;
+
+/** 取视口尺寸（Frame 无此方法，需容错） */
+function viewportOf(t: ShootTarget): { width: number; height: number } {
+  const vp = (t as Page).viewportSize?.();
+  if (vp) return vp;
+  // Frame 场景：同步拿不到，用 evaluate 异步读，由调用方在 catch 中回退
+  return { width: 1280, height: 900 };
+}
+
 /**
  * 截图并可选脱敏。
  * - selector 存在则局部截图，坐标相对容器（iframe 偏移自动消失）
  * - redact 为 true 时遮挡姓名条 / 头像 / 二维码
  */
 export async function captureQuizShot(
-  page: Page,
+  target: ShootTarget,
   opts: { selector?: string; redact?: boolean } = {}
 ): Promise<QuizShot | null> {
   const { selector, redact } = opts;
+  const page = target as Page;
+  const frame = target as Frame;
+  const isFrame = typeof (target as Frame).evaluate === 'function' && !(target as Page).viewportSize;
   let w = 0;
   let h = 0;
   let cropped = false;
@@ -113,14 +127,14 @@ export async function captureQuizShot(
   }
 
   // 回退全屏截图：坐标相对整页
-  const vp = page.viewportSize() || { width: 1280, height: 900 };
+  const vp = viewportOf(target);
   cropped = false;
   used = undefined;
   w = vp.width;
   h = vp.height;
-  redacted = redact ? await drawRedactions(page, true) : [];
-  const buf = await shoot(() => page.screenshot(SHOT_OPTS));
-  if (redact) await clearRedactions(page);
+  redacted = redact ? await drawRedactions(target, true) : [];
+  const buf = await shoot(() => (isFrame ? page.locator('body').screenshot(SHOT_OPTS) : page.screenshot(SHOT_OPTS)));
+  if (redact) await clearRedactions(target);
   if (!buf) return null;
 
   return { jpeg: buf.toString('base64'), w, h, cropped, selector: used, redacted };
@@ -130,9 +144,9 @@ export async function captureQuizShot(
  * 在页面里画遮挡层，直接返回遮挡区域列表。
  * 遮挡层用完由 clearRedactions 擦除。
  */
-async function drawRedactions(page: Page, add: boolean): Promise<Rect[]> {
+async function drawRedactions(target: ShootTarget, add: boolean): Promise<Rect[]> {
   try {
-    return await page.evaluate(
+    return await target.evaluate(
       (args: { add: boolean; id: string }) => {
         document.getElementById(args.id)?.remove();
         const layer = document.createElement('div');
@@ -225,8 +239,8 @@ async function drawRedactions(page: Page, add: boolean): Promise<Rect[]> {
 }
 
 /** 擦除遮挡层 */
-async function clearRedactions(page: Page): Promise<void> {
+async function clearRedactions(target: ShootTarget): Promise<void> {
   try {
-    await page.evaluate((id: string) => document.getElementById(id)?.remove(), REDACT_ID);
+    await target.evaluate((id: string) => document.getElementById(id)?.remove(), REDACT_ID);
   } catch {}
 }
