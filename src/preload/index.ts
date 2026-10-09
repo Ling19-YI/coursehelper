@@ -23,6 +23,15 @@ const api: Api = {
   getAppInfo: () => ipcRenderer.invoke('app:info'),
   getVision: () => ipcRenderer.invoke('vision:get'),
   setVision: key => ipcRenderer.invoke('vision:set', key),
+  checkUpdate: () => ipcRenderer.invoke('update:check'),
+  downloadUpdate: () => ipcRenderer.invoke('update:download'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  getUpdateState: () => ipcRenderer.invoke('update:state'),
+  onUpdateEvent: cb => {
+    const handler = (_e: unknown, info: any) => cb(info?.info ?? info);
+    ipcRenderer.on('update:event', handler);
+    return () => ipcRenderer.removeListener('update:event', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('ch', api);

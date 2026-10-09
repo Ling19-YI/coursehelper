@@ -7,6 +7,20 @@ export interface AppInfo {
   legacy?: boolean;
 }
 
+export interface UpdateState {
+  checking: boolean;
+  available: boolean;
+  version?: string;
+  notes?: string;
+  releaseDate?: string;
+  percent: number;
+  speed: number;
+  transferred: number;
+  total: number;
+  downloading: boolean;
+  message: string;
+}
+
 export interface Api {
   onEngineEvent(cb: (e: EngineEvent) => void): () => void;
   getState(): Promise<{ state: TaskState; running: boolean; mode: string | null }>;
@@ -25,6 +39,12 @@ export interface Api {
   /** 视觉服务配置状态（只回传掩码提示，不回传完整 key） */
   getVision(): Promise<{ configured: boolean; hint: string }>;
   setVision(key: string): Promise<{ configured: boolean }>;
+  /** 自动更新 */
+  checkUpdate(): Promise<UpdateState>;
+  downloadUpdate(): Promise<UpdateState>;
+  installUpdate(): Promise<boolean>;
+  getUpdateState(): Promise<UpdateState>;
+  onUpdateEvent(cb: (s: UpdateState) => void): () => void;
 }
 
 declare global {

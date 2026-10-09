@@ -3,6 +3,7 @@ import * as path from 'path';
 import { Store } from './store';
 import { Session } from './session';
 import { registerIpc } from './ipc';
+import { initUpdater, checkForUpdates } from './updater';
 
 app.setName('刷课助手 CourseHelper');
 
@@ -62,6 +63,12 @@ async function createWindow() {
     win = null;
     session = null;
   });
+
+  // 自动更新：启动后稍作延迟再检查，避免与登录流程抢网络
+  initUpdater(() => win);
+  setTimeout(() => {
+    void checkForUpdates();
+  }, 12000);
 }
 
 app.whenReady().then(() => {

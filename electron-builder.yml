@@ -12,7 +12,27 @@ files:
   - app/dist/browsers.json
   - app/renderer/**
   - package.json
+  # electron-updater 的运行时依赖树必须随包分发，否则在线更新会失败
+  - node_modules/electron-updater/**
+  - node_modules/electron-builder-runtime/**
+  - node_modules/@electron/**/*
+  - node_modules/@electron-toolkit/**/*
+  - node_modules/@vscode/**/*
+  - node_modules/builder-util-runtime/**
+  - node_modules/chalk/**
+  - node_modules/detect-libc/**
+  - node_modules/js-yaml/**
+  - node_modules/lru-cache/**
+  - node_modules/semver/**
+  - node_modules/tilde/**
+  - node_modules/temp/**
+  - node_modules/typescript/lib/*.js
 asar: true
+# 上面这些是 electron-updater 需要的运行时文件，必须解包到磁盘
+asarUnpack:
+  - "**/node_modules/builder-util-runtime/**"
+  - "**/node_modules/electron-updater/**"
+  - "**/node_modules/@electron/**/*"
 win:
   target:
     - target: nsis
@@ -28,3 +48,10 @@ nsis:
   shortcutName: 刷课助手
   artifactName: CourseHelper-Setup-${version}.exe
   uninstallDisplayName: 刷课助手 CourseHelper
+# 发布源：electron-updater 依赖它来发现新版本并下载
+publish:
+  - provider: github
+    owner: Ling19-YI
+    repo: coursehelper
+    releaseType: release
+    private: false

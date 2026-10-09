@@ -8,6 +8,7 @@ import type { Course, EngineEvent } from '../shared/types';
 import type { AppInfo } from '../shared/api';
 import { ProgressStore } from './engine/progress';
 import { legacyDirCandidates } from './store';
+import { checkForUpdates, downloadUpdate, quitAndInstall, getUpdateState } from './updater';
 
 const pkgVersion = () => {
   try {
@@ -139,6 +140,23 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
     store.saveVisionKey(key);
     return { configured: !!store.loadVisionKey() };
   });
+
+  ipcMain.handle('update:check', () => {
+    void checkForUpdates();
+    return getUpdateState();
+  });
+
+  ipcMain.handle('update:download', () => {
+    downloadUpdate();
+    return getUpdateState();
+  });
+
+  ipcMain.handle('update:install', () => {
+    quitAndInstall();
+    return true;
+  });
+
+  ipcMain.handle('update:state', () => getUpdateState());
 
   ipcMain.handle('app:info', (): AppInfo => {
     const settings = store.settings;
