@@ -213,13 +213,40 @@ export async function login(page: Page, h: EngineHooks, username: string, passwo
   await h.ctl.sleep(3000);
   await page.locator('#phone').fill(username);
   await page.locator('#pwd').fill(password);
-  await page.locator('.btn-big-blue').click();
-  await h.ctl.sleep(5000);
-  if (!page.url().includes('passport2')) {
-    h.log('ok', '✓ 登录成功');
-    return true;
+  // 登录页要求先勾选《隐私政策》《用户协议》，否则点登录无任何反应（不跳转不报错）
+  const agree = page.locator('.check-input, .checkbox, [class*="check-input"]').first();
+  if (await agree.count().catch(() => 0)) {
+    const needCheck = await agree
+      .evaluate(el => !/checked|active|on/.test(String(el.className)))
+      .catch(() => false);
+    if (needCheck) {
+      const box = await agree.boundingBox();
+      if (box) {
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        await h.ctl.sleep(500);
+      }
+    }
   }
-  h.log('error', '✗ 登录失败（账号密码错误或需要验证码）');
+
+  await page.locator('.btn-big-blue').click({ timeout: 10000 }).catch(() => {});
+
+  // 等待跳转（最多 20s），而不是固定 sleep 后就判定失败
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    h.ctl.throwIfStopped();
+    if (!page.url().includes('passport2')) {
+      h.log('ok', '✓ 登录成功');
+      return true;
+    }
+    await h.ctl.sleep(1000);
+  }
+  const tip = await page
+    .evaluate(() => {
+      const el = document.querySelector('[class*="tip" i], [class*="error" i]') as HTMLElement | null;
+      return el ? (el.innerText || '').trim().slice(0, 40) : '';
+    })
+    .catch(() => '');
+  h.log('error', `✗ 登录失败${tip ? '：' + tip : '（账号密码错误或需要验证码）'}`);
   return false;
 }
 
