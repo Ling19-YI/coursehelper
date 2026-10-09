@@ -37,6 +37,9 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
       dataDir,
       emit,
       getDeepseekKey: () => store.settings.deepseekKey,
+      getVideoSpeed: () => Number(store.settings.videoSpeed) || 1,
+      getAgentEnabled: () => !!store.settings.agentEnabled,
+      getVisionKey: () => store.loadVisionKey() ?? '',
     });
     engineDataDir = dataDir;
     return engine;
@@ -117,6 +120,20 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
   ipcMain.handle('credentials:clear', () => {
     store.clearCredentials();
     return true;
+  });
+
+  ipcMain.handle('vision:get', () => {
+    const key = store.loadVisionKey();
+    return {
+      // 只回传末4 位用于界面确认，不泄露完整 key
+      configured: !!key,
+      hint: key ? `\u2022\u2022\u2022\u2022${key.slice(-4)}` : '',
+    };
+  });
+
+  ipcMain.handle('vision:set', (_ev, key: string) => {
+    store.saveVisionKey(key);
+    return { configured: !!store.loadVisionKey() };
   });
 
   ipcMain.handle('app:info', (): AppInfo => {

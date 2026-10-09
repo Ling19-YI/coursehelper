@@ -13,12 +13,47 @@ export interface VideoState {
   err: string;
 }
 
-/** 强制播放：读取视频状态，若暂停则 play() */
+/** 目标倍速：写在每个页面的 window.__kaRate 上，保活 ticker 与 forcePlay 都会维持它 */
+let desiredRate = 1;
+
+const clampRate = (r: number) => Math.min(2, Math.max(1, Number(r) || 1));
+
+export function getDesiredRate(): number {
+  return desiredRate;
+}
+
+/** 设置倍速（页面重载后需重新调用）：>1x 持续维持，≤1x 一律恢复原速 */
+export async function setVideoRate(page: Page, rate: number): Promise<void> {
+  desiredRate = clampRate(rate);
+  for (const frame of page.frames()) {
+    try {
+      await frame.evaluate((r: number) => {
+        (window as any).__kaRate = r;
+        const want = r > 1 ? r : 1;
+        const vs = document.querySelectorAll('video');
+        for (let i = 0; i < vs.length; i++) {
+          const v = vs[i] as HTMLVideoElement;
+          try {
+            if (Math.abs(v.playbackRate - want) > 0.01) v.playbackRate = want;
+          } catch (e) {}
+        }
+      }, desiredRate);
+    } catch {}
+  }
+}
+
+/** 强制播放：读取视频状态，若暂停则 play()，并维持目标倍速 */
 export async function forcePlay(frame: Frame): Promise<VideoState | null> {
   return await frame.evaluate(() => {
     const v = document.querySelector('video') as HTMLVideoElement | null;
     if (!v) return null;
     let err = '';
+    // 平台播放器可能把倍速改回 1x，这里纠正回目标值（≤1x 时恢复原速）
+    try {
+      const target = Number((window as any).__kaRate) || 1;
+      const want = target > 1 ? target : 1;
+      if (Math.abs(v.playbackRate - want) > 0.01) v.playbackRate = want;
+    } catch {}
     if (v.paused) {
       try {
         const p = v.play();
@@ -119,6 +154,9 @@ export const SPY_JS = `(() => {
           const v = vs[i];
           try {
             if (v.duration > 0 && !v.ended && v.paused) v.play().catch(function () {});
+            var kr = Number(window.__kaRate) || 1;
+            var want = kr > 1 ? kr : 1;
+            if (Math.abs(v.playbackRate - want) > 0.01) v.playbackRate = want;
           } catch (e) {}
         }
         const ev = ['mousemove', 'mouseover', 'mouseenter'];

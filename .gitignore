@@ -17,7 +17,7 @@ promo/out/
 promo/dl/
 promo/src/narration.sync.json
 
-# һ����ƽ̨̽��ű���������·��������⣩
+# 一体化平台探测脚本，含本机绝对路径，不可复现
 scripts/chapter-markers.ts
 scripts/debug-chapters.ts
 scripts/debug-open-chapter.ts
@@ -27,7 +27,24 @@ scripts/engine-cli.ts
 scripts/debug-creds.cjs
 scripts/make-png.cjs
 
-# ƽ̨̽�ⱨ�棨����ʵ�γ�����
+# 平台探测报告，含本机信息
 promo/probe-report.json
 scripts/probe-manual.ts
 scripts/verify-resume.ts
+
+# 本地探针/验证脚本，含真实路径、密钥或会话信息
+scripts/local-*.mjs
+scripts/local-*.cjs
+
+# 宣传片中间产物与大文件（不入库）
+promo/asarcheck.jpg
+promo/manbo-test/
+promo/voice-effect.env
+promo/vertical/frames/
+promo/vertical/story-frames/
+promo/vertical/out/
+promo/vertical/voice/
+promo/vertical/story-voice/
+promo/vertical/assets/
+promo/vertical/dl/
+promo/vertical/shots/

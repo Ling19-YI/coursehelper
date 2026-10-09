@@ -6,10 +6,12 @@ import {
   Divider,
   Input,
   Popconfirm,
+  Select,
   Space,
   Tag,
   Typography,
 } from 'antd';
+import { Switch, Tooltip } from 'antd';
 import { SaveOutlined, LogoutOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { useApp } from '../state';
 
@@ -20,19 +22,34 @@ export default function Settings() {
   const [password, setPassword] = useState('');
   const [key, setKey] = useState('');
   const [dataDir, setDataDir] = useState('');
+  const [speed, setSpeed] = useState<number>(1);
+  const [agentOn, setAgentOn] = useState(false);
+  const [visionKey, setVisionKey] = useState('');
+  const [visionInfo, setVisionInfo] = useState<{ configured: boolean; hint: string }>({
+    configured: false,
+    hint: '',
+  });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (a.settings) {
       setKey(a.settings.deepseekKey ?? '');
       setDataDir(a.settings.dataDir ?? '');
+      setSpeed(Number(a.settings.videoSpeed) || 1);
+      setAgentOn(!!a.settings.agentEnabled);
     }
     if (a.username) setUsername(a.username);
+    window.ch.getVision().then(setVisionInfo).catch(() => {});
   }, [a.settings, a.username]);
 
   const save = async () => {
     setSaving(true);
     try {
+      if (agentOn && !visionInfo.configured && !visionKey.trim()) {
+        message.warning('AI 答题需要先填写多模态 API Key');
+        setSaving(false);
+        return;
+      }
       if (username.trim() && password) {
         await a.saveCredentials(username.trim(), password);
         setPassword('');
@@ -42,10 +59,17 @@ export default function Settings() {
         setSaving(false);
         return;
       }
+      if (visionKey.trim()) {
+        await window.ch.setVision(visionKey.trim());
+        setVisionKey('');
+      }
       await a.saveSettings({
         deepseekKey: key.trim(),
         dataDir: dataDir.trim(),
+        videoSpeed: speed,
+        agentEnabled: agentOn,
       });
+      window.ch.getVision().then(setVisionInfo).catch(() => {});
       message.success('设置已保存');
     } catch (e) {
       message.error(String((e as Error)?.message || e));
@@ -95,9 +119,45 @@ export default function Settings() {
       </div>
 
       <div className="cardish">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <b>AI 自动答题</b>
+          <Tooltip
+            title={
+              visionInfo.configured
+                ? '开启后遇到测验或随堂弹窗会自动答题'
+                : '需先在下方填写多模态 API Key'
+            }
+          >
+            <Switch checked={agentOn} onChange={setAgentOn} disabled={!visionInfo.configured} />
+          </Tooltip>
+        </div>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          总开关。关闭后遇到题目会跳过并记入日志，不影响视频播放与文档任务。
+          {agentOn && (
+            <div style={{ marginTop: 6 }}>
+              <Tag color="processing">已开启</Tag>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="cardish">
+        <b>多模态 API Key</b>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          用于看图答题。仅保存在本机（系统加密），不会上传或写入配置文件。
+        </div>
+        <Input.Password
+          placeholder={visionInfo.configured ? `已保存 ${visionInfo.hint}，留空则不修改` : 'sk-...'}
+          value={visionKey}
+          onChange={e => setVisionKey(e.target.value)}
+          autoComplete="off"
+        />
+      </div>
+
+      <div className="cardish">
         <b>DeepSeek API Key（选填）</b>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          用于自动回答章节测验；不填则遇到答题会跳过并记入日志。
+          仅用于纯文本场景的章节测验；AI 自动答题走上方多模态通道。
         </div>
         <Input.Password
           placeholder="sk-..."
@@ -105,6 +165,33 @@ export default function Settings() {
           onChange={e => setKey(e.target.value)}
           autoComplete="off"
         />
+      </div>
+
+      <div className="cardish">
+        <b>视频倍速</b>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          只影响课程视频，不影响文档与测验。个别视频平台会强制 1x，届时会自动改回并在日志提示。
+        </div>
+        <Select
+          value={speed}
+          onChange={v => setSpeed(v)}
+          style={{ width: '100%' }}
+          options={[
+            { value: 1, label: '1x（默认，最稳）' },
+            { value: 1.25, label: '1.25x（推荐）' },
+            { value: 1.5, label: '1.5x（更快）' },
+            { value: 2, label: '2x（最快，进度上报可能受影响）' },
+          ]}
+        />
+        {speed > 1 && (
+          <div style={{ marginTop: 10 }}>
+            <Alert
+              type="warning"
+              showIcon
+              message="倍速可能影响平台进度上报，建议先小范围试一节课，确认平台已记录进度后再全量使用。"
+            />
+          </div>
+        )}
       </div>
 
       <div className="cardish">

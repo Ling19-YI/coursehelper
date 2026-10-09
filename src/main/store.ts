@@ -42,6 +42,7 @@ export class Store {
   readonly userData: string;
   readonly settingsFile: string;
   readonly credsFile: string;
+  readonly visionFile: string;
   readonly dataDir: string;
   settings: AppSettings;
 
@@ -49,6 +50,7 @@ export class Store {
     this.userData = app.getPath('userData');
     this.settingsFile = path.join(this.userData, 'settings.json');
     this.credsFile = path.join(this.userData, 'credentials.enc');
+    this.visionFile = path.join(this.userData, 'vision.enc');
     this.dataDir = path.join(this.userData, 'data');
 
     const disk = readJson<Partial<AppSettings>>(this.settingsFile) || {};
@@ -102,6 +104,38 @@ export class Store {
   clearCredentials() {
     try {
       fs.unlinkSync(this.credsFile);
+    } catch {}
+  }
+
+  /** 视觉服务 key：与账号同等级的系统加密存储，不写进 settings.json */
+  loadVisionKey(): string | null {
+    try {
+      if (!fs.existsSync(this.visionFile)) return null;
+      const buf = fs.readFileSync(this.visionFile);
+      const raw = safeStorage.isEncryptionAvailable()
+        ? safeStorage.decryptString(buf)
+        : buf.toString('utf-8');
+      const key = String(JSON.parse(raw) || '').trim();
+      return key || null;
+    } catch {
+      return null;
+    }
+  }
+
+  saveVisionKey(key: string) {
+    const value = String(key || '').trim();
+    if (!value) {
+      this.clearVisionKey();
+      return;
+    }
+    const json = Buffer.from(JSON.stringify(value), 'utf-8');
+    const out = safeStorage.isEncryptionAvailable() ? safeStorage.encryptString(json.toString('utf-8')) : json;
+    fs.writeFileSync(this.visionFile, out);
+  }
+
+  clearVisionKey() {
+    try {
+      fs.unlinkSync(this.visionFile);
     } catch {}
   }
 

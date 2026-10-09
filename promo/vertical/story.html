@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1080px; height:1920px; overflow:hidden; background:#000; }
+  #stage { position:absolute; inset:0; }
+  /* 纯黑底 + 极轻微胶片颗粒 */
+  .grain { position:absolute; inset:0; opacity:.16; mix-blend-mode:screen;
+    background-image:radial-gradient(rgba(255,255,255,.10) 1px, transparent 1px);
+    background-size:3px 3px; }
+  .vscan { position:absolute; inset:0; opacity:.05;
+    background:repeating-linear-gradient(180deg, rgba(255,255,255,.35) 0 1px, transparent 1px 4px); }
+  .cursor { display:inline-block; width:8px; height:64px; margin-left:10px; vertical-align:-8px;
+    background:#4ade80; box-shadow:0 0 22px rgba(74,222,128,.85); }
+  .text { font-family:"Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+    font-weight:800; color:#f1f5f9; line-height:1.62; letter-spacing:1px;
+    text-shadow:0 0 40px rgba(74,222,128,.18); }
+  .dim { color:#64748b; }
+  .hl { color:#4ade80; }
+  .hlY { color:#fde047; }
+  #hint { position:absolute; bottom:90px; left:0; right:0; text-align:center;
+    font-size:34px; color:#334155; opacity:0; letter-spacing:4px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="grain"></div>
+  <div class="vscan"></div>
+  <div id="wrap" style="position:absolute;left:0;right:0;top:0;bottom:220px;display:flex;align-items:center;justify-content:center;padding:100px 80px"></div>
+  <div id="hint">↓ 接下来是软件演示</div>
+</div>
+<script>
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const easeOut=p=>1-Math.pow(1-p,2);
+window.STORY = window.STORY || [];   // [{t0,t1,text,chars}]
+window.STORY_END = 26;
+
+window.seek=function(t){
+  const s=window.STORY;
+  const wrap=document.getElementById('wrap');
+  const hint=document.getElementById('hint');
+
+  // 当前该显示到第几句、每句显示多少字
+  let lines=[];
+  for(const seg of s){
+    const chars=[...seg.text];
+    if(t<seg.t0){ lines.push({seg,chars,shown:0}); continue; }
+    if(t>=seg.t1){ lines.push({seg,chars,shown:chars.length}); continue; }
+    // 打字中：最后 85% 时间用来打完整句（留 15% 停顿）
+    const span=Math.max(0.2,(seg.t1-seg.t0)*0.85);
+    const p=clamp((t-seg.t0)/span,0,1);
+    lines.push({seg,chars,shown:Math.floor(easeOut(p)*chars.length)});
+  }
+
+  const html=lines.map((l,i)=>{
+    const shown=l.shown;
+    const isCur=shown>0 && shown<l.chars.length;
+    const txt=l.chars.slice(0,shown).join('');
+    return `<div style="margin-bottom:${i===lines.length-1?0:34}px">
+      <span class="${i%3===2?'hlY':''}">${txt}</span>${isCur?'<span class="cursor"></span>':''}
+    </div>`;
+  }).join('');
+
+  wrap.innerHTML=`<div class="text" style="font-size:76px;width:900px">${html}</div>`;
+
+  // 全打完后底部提示淡入
+  const last=s[s.length-1];
+  const done=last && t>last.t1;
+  hint.style.opacity=done?clamp((t-last.t1-0.3)/0.6,0,1)*0.9:0;
+  return lines.length;
+};
+window.seek(0);
+</script>
+</body>
+</html>

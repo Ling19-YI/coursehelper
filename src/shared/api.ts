@@ -22,6 +22,9 @@ export interface Api {
   setCredentials(username: string, password: string): Promise<void>;
   clearCredentials(): Promise<void>;
   getAppInfo(): Promise<AppInfo>;
+  /** 视觉服务配置状态（只回传掩码提示，不回传完整 key） */
+  getVision(): Promise<{ configured: boolean; hint: string }>;
+  setVision(key: string): Promise<{ configured: boolean }>;
 }
 
 declare global {

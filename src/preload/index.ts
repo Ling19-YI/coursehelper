@@ -21,6 +21,8 @@ const api: Api = {
   setCredentials: (username, password) => ipcRenderer.invoke('credentials:set', username, password),
   clearCredentials: () => ipcRenderer.invoke('credentials:clear'),
   getAppInfo: () => ipcRenderer.invoke('app:info'),
+  getVision: () => ipcRenderer.invoke('vision:get'),
+  setVision: key => ipcRenderer.invoke('vision:set', key),
 };
 
 contextBridge.exposeInMainWorld('ch', api);

@@ -25,6 +25,12 @@ export interface EngineOptions {
   dataDir: string;
   emit(e: EngineEvent): void;
   getDeepseekKey(): string;
+  /** 视频倍速（1 / 1.25 / 1.5 / 2） */
+  getVideoSpeed(): number;
+  /** AI 答题总开关 */
+  getAgentEnabled(): boolean;
+  /** 多模态视觉服务 key */
+  getVisionKey(): string;
 }
 
 const clean = (s: string) => s.replace(/\n/g, ' ').trim();
@@ -55,6 +61,12 @@ export class ChaoxingEngine {
       onTick: s =>
         this.emit({ type: 'video', ...s, chapter: this.currentChapter, ts: Date.now() }),
       diag: tag => diagVideo(opts.page, tag, path.join(opts.dataDir, 'diag')),
+      speed: () => {
+        const r = Number(opts.getVideoSpeed());
+        return isNaN(r) ? 1 : Math.min(2, Math.max(1, r));
+      },
+      agentEnabled: () => !!opts.getAgentEnabled(),
+      visionKey: () => String(opts.getVisionKey() || ''),
     };
   }
 
@@ -314,7 +326,11 @@ export class ChaoxingEngine {
                   this.log('info', '    - 无视频/无文档，跳过');
                 }
               } else {
-                const r = await waitForVideoEnd(this.opts.page, this.hooks);
+                const r = await waitForVideoEnd(
+                  this.opts.page,
+                  this.hooks,
+                  this.opts.getDeepseekKey()
+                );
                 if (r === 'completed') {
                   this.store.markChapterDone(ensureProgress(), chapter.onclick);
                   summary.completed++;

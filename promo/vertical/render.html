@@ -1,0 +1,238 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1080px; height:1920px; overflow:hidden; background:#05080f;
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif; color:#fff; }
+  #stage { position:absolute; inset:0; }
+  .bg { position:absolute; inset:0;
+    background:
+      radial-gradient(900px 700px at 50% 8%, rgba(59,130,246,.34), transparent 62%),
+      radial-gradient(800px 900px at 12% 92%, rgba(124,58,237,.30), transparent 62%),
+      linear-gradient(180deg,#0a1020,#05080f 60%,#0a0f1d); }
+  .grid { position:absolute; inset:0; opacity:.09;
+    background-image:linear-gradient(rgba(148,163,184,.4) 2px,transparent 2px),
+                     linear-gradient(90deg,rgba(148,163,184,.4) 2px,transparent 2px);
+    background-size:90px 90px; mask-image:radial-gradient(circle at 50% 40%,#000 26%,transparent 76%); }
+  .scene { position:absolute; inset:0; }
+  .hook { font-weight:900; text-align:center; line-height:1.24; letter-spacing:1px;
+    text-shadow:0 8px 40px rgba(0,0,0,.85); }
+  .yellow { color:#ffe14d; }
+  .cyan { color:#5ee7ff; }
+  .pink { color:#ff8ec7; }
+  .fcard { background:rgba(18,26,42,.94); border:2px solid rgba(94,231,255,.5);
+    border-radius:34px; padding:52px 46px; box-shadow:0 24px 70px rgba(0,0,0,.6); }
+  .badge { display:inline-block; padding:10px 26px; border-radius:999px; font-size:30px; font-weight:800;
+    background:linear-gradient(135deg,#3b82f6,#a855f7); }
+  .shot { position:absolute; border-radius:28px; overflow:hidden;
+    box-shadow:0 30px 90px rgba(0,0,0,.7), 0 0 0 3px rgba(148,163,184,.35); }
+  .shot img { display:block; width:100%; height:100%; object-fit:cover; }
+  .char { position:absolute; bottom:0; will-change:transform; filter:drop-shadow(0 20px 50px rgba(0,0,0,.6)); }
+  #topbar { position:absolute; top:0; left:0; right:0; height:10px; background:rgba(255,255,255,.08); }
+  #topfill { height:100%; background:linear-gradient(90deg,#ffe14d,#ff8ec7,#5ee7ff); }
+  .watermark { position:absolute; top:56px; left:0; right:0; text-align:center;
+    font-size:30px; color:rgba(226,232,240,.72); font-weight:700; }
+  .step { display:flex; align-items:center; gap:28px; }
+  .num { width:96px; height:96px; border-radius:28px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center; font-size:48px; font-weight:900; color:#0b1220;
+    background:linear-gradient(135deg,#ffe14d,#ff8ec7); }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="topbar"><div id="topfill"></div></div>
+<div class="watermark">刷课助手 CourseHelper · 超星学习通自动刷课 · 完全免费</div>
+<script>
+const DUR = 30;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const ease=p=>1-Math.pow(1-p,3);
+const pop=p=>{const c=1.70158+1;return 1+ (c+1)*Math.pow(p-1,3)+c*Math.pow(p-1,2);};
+const S=n=>`../shots/${n}.png`;
+const CH={ wave:'assets/char-wave.png', point:'assets/point-alpha.png', excited:'assets/excited-alpha.png' };
+
+/* ===== 口播数据（构建脚本注入，与配音逐句同源） ===== */
+window.NARRATION = window.NARRATION || [];
+
+/* 当前这一刻正在念的句子 + 已念出的字数（屏幕文字 = 嘴里的话） */
+function speech(t){
+  const n = window.NARRATION.find(s=>t>=s.t0 && t<=s.t1);
+  if(!n) return {total:0, chars:[], shown:0, done:true};
+  const chars=[...n.text];
+  const span=Math.max(0.25,(n.t1-n.t0)*0.88);
+  const p=clamp((t-n.t0)/span,0,1);
+  return {chars, total:chars.length, shown:Math.floor(p*chars.length), done:p>=1};
+}
+
+/* 把整句预先均衡断行：按可用宽度算每行字数，均分行数，并避免标点落在行首 */
+const PUNC='，。？！、：；,.?!';
+function layout(chars, font, pad){
+  const per=Math.max(6,Math.floor((1080-pad*2)/font));
+  const n=Math.max(1,Math.ceil(chars.length/per));
+  const base=Math.floor(chars.length/n), rem=chars.length%n;
+  const cuts=[]; let i=0;
+  for(let l=0;l<n;l++){ const len=base+(l<rem?1:0); cuts.push([i,i+len]); i+=len; }
+  for(let l=1;l<cuts.length;l++){
+    if(PUNC.includes(chars[cuts[l][0]])){ cuts[l-1][1]+=1; cuts[l][0]+=1; }
+  }
+  // 英文/数字连写不断开（GitHub 不能拆成 GitH + ub）
+  const isWord=c=>/[A-Za-z0-9]/.test(c);
+  for(let l=1;l<cuts.length;l++){
+    let c=cuts[l][0];
+    let guard=0;
+    while(c>cuts[l-1][0]+1 && c<chars.length && isWord(chars[c-1]) && isWord(chars[c]) && guard++<12){
+      cuts[l-1][1]++; c++; cuts[l][0]=c;
+    }
+  }
+  return cuts;
+}
+
+/* 把已念出的字渲染成大字：关键词高亮 + 逐字出现 + 未念完显示光标 */
+const HL=/(完全免费|免费|一键全选|点个赞|点颗星星|全部搞定|三步就装好|实时滚动|断点续跑)/g;
+function spoken(sp, size, opt){
+  const o=opt||{};
+  const pad=o.pad==null?60:o.pad;
+  const n=sp.total;
+  const shown=n?sp.shown:0;
+  const cuts=n?layout(sp.chars,size,pad):[];
+  const HLSPAN=s=>s.replace(HL,'<span class="yellow">$1</span>');
+  let html='', prev=0;
+  for(const [a,b] of cuts){
+    const end=Math.min(b,shown);
+    if(end>a) html+=HLSPAN(sp.chars.slice(a,end).join(''));
+    if(b<=shown && b<n) html+='<br>';
+    prev=b;
+  }
+  if(!n) html='&nbsp;';
+  const caret=(n&&!sp.done)?'<span style="color:#5ee7ff">▍</span>':'';
+  return `<div class="hook" style="font-size:${size}px;${o.style||''};padding:0 ${pad}px">${html}${caret}</div>`;
+}
+
+/* 取某个时间窗内的口播句（用于快切场景定位当前第几句） */
+function segsIn(a,b){ return window.NARRATION.filter(s=>s.t1>a && s.t0<b); }
+
+/* ===== 场景：屏幕上的字全部来自正在念的那句话 ===== */
+const scenes=[
+  // 0-3s 钩子
+  { t0:0.0, t1:3.0, name:'hook', draw(p,t,said,sp){
+      const k=pop(clamp(p/0.28,0,1));
+      const sh=Math.sin(p*Math.PI*6)*10*(1-p);
+      return `<div class="scene" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:340px;gap:46px">
+        ${spoken(sp,128,{style:`transform:scale(${k}) translateY(${sh}px)`})}
+        <img class="char" src="${CH.excited}" style="width:600px;position:static;transform:none;opacity:${clamp((p-0.35)/0.3,0,1)};margin-top:-10px"/>
+      </div>`;
+  }},
+  // 3-6s 两个卖点快切（跟着口播句子切）
+  { t0:3.0, t1:6.0, name:'features', draw(p,t,said,sp){
+      const segs=segsIn(3,6);
+      let idx=0; segs.forEach((s,i)=>{ if(t>=s.t0) idx=i; });
+      const imgs=[CH.wave,CH.point,CH.excited];
+      const k=pop(clamp((t-segs[idx].t0)/0.3,0,1));
+      const fade=clamp((t-segs[idx].t0)/0.12,0,1)*clamp((segs[idx].t1-t)/0.18,0,1);
+      return `<div class="scene" style="display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding-top:330px;gap:40px">
+        <div class="fcard" style="transform:scale(${k});opacity:${fade};text-align:center;width:880px">
+          <div class="badge">卖点 ${idx+1} / ${segs.length}</div>
+          <div style="margin-top:34px">${spoken(sp,92,{pad:150})}</div>
+        </div>
+        <img class="char" src="${imgs[idx]}" style="width:600px;position:static;transform:none;opacity:${fade}"/>
+      </div>`;
+  }},
+  // 6-11s 真机演示
+  { t0:6.0, t1:11.0, name:'demo1', draw(p,t,said,sp){
+      const k=1+0.05*ease(p);
+      return `<div class="scene">
+        <div class="shot" style="left:40px;top:430px;width:1000px;height:1100px;transform:scale(${k})">
+          <img src="${S('app-4-running')}"/>
+          <div style="position:absolute;left:85.3%;top:3.4%;width:13%;height:4.2%;backdrop-filter:blur(26px);background:rgba(20,26,40,.5);border-radius:8px"></div>
+          <div style="position:absolute;left:50%;top:24.8%;width:11%;height:3.2%;backdrop-filter:blur(26px);background:rgba(20,26,40,.5);border-radius:8px"></div>
+        </div>
+        ${spoken(sp,74,{style:'position:absolute;top:210px;left:0;right:0'})}
+        <div style="position:absolute;top:1560px;left:0;right:0;text-align:center">
+          <span class="badge" style="font-size:38px">真机运行</span>
+        </div>
+      </div>`;
+  }},
+  // 11-15.5s 日志滚动
+  { t0:11.0, t1:15.5, name:'demo2', draw(p,t,said,sp){
+      const k=1+0.04*ease(p);
+      return `<div class="scene">
+        <div class="shot" style="left:40px;top:440px;width:1000px;height:1080px;transform:scale(${k})">
+          <img src="${S('app-4-running')}"/>
+          <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(5,8,15,.25),rgba(5,8,15,.7));border-radius:28px"></div>
+        </div>
+        ${spoken(sp,74,{style:'position:absolute;top:250px;left:0;right:0'})}
+      </div>`;
+  }},
+  // 15.5-20s 课程列表
+  { t0:15.5, t1:20.0, name:'demo3', draw(p,t,said,sp){
+      const k=pop(clamp(p/0.3,0,1));
+      return `<div class="scene" style="display:flex;flex-direction:column;align-items:center;padding-top:230px;gap:26px">
+        ${spoken(sp,80)}
+        <div class="shot" style="position:relative;left:0;top:0;width:920px;height:1020px;transform:scale(${0.94+0.06*k})">
+          <img src="${S('app-2-courses')}" style="object-position:0 0"/>
+          <div style="position:absolute;right:0;top:0;width:34%;bottom:0;background:linear-gradient(90deg,transparent,rgba(5,8,15,.97) 28%)"></div>
+        </div>
+        <img class="char" src="${CH.point}" style="width:440px;position:static;transform:none"/>
+      </div>`;
+  }},
+  // 20-24s 三步安装
+  { t0:20.0, t1:24.0, name:'install', draw(p,t,said,sp){
+      const steps=[['1','下载','安装包'],['2','下一步','一路点过去'],['3','完成','打开即用']];
+      return `<div class="scene" style="display:flex;flex-direction:column;align-items:center;padding:170px 70px 0;gap:56px">
+        ${spoken(sp,84)}
+        <div style="display:flex;flex-direction:column;gap:40px;width:100%">
+          ${steps.map((s,i)=>{
+            const o=clamp((p-0.16*i)/0.26,0,1);
+            return `<div class="step" style="background:rgba(18,26,42,.92);border:2px solid rgba(94,231,255,.35);border-radius:30px;padding:36px 44px;opacity:${o};transform:translateX(${(1-ease(o))*-70}px)">
+              <div class="num">${s[0]}</div>
+              <div><div style="font-size:58px;font-weight:800">${s[1]}</div>
+              <div style="font-size:34px;color:#8fa0ba;margin-top:8px">${s[2]}</div></div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="background:rgba(250,204,21,.12);border:2px solid rgba(250,204,21,.4);border-radius:24px;padding:26px 32px;font-size:32px;color:#fde68a;opacity:${clamp((p-0.7)/0.25,0,1)};line-height:1.5;text-align:center">
+          提示「已保护你的电脑」→ 更多信息 → 仍要运行
+        </div>
+        <img class="char" src="${CH.point}" style="width:480px;position:static;transform:none;opacity:${clamp((p-0.8)/0.2,0,1)};margin-top:-30px"/>
+      </div>`;
+  }},
+  // 24-27s 完全免费
+  { t0:24.0, t1:27.0, name:'free', draw(p,t,said,sp){
+      const bob=Math.sin(p*Math.PI*4)*14;
+      return `<div class="scene" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px">
+        ${spoken(sp,96)}
+        <img class="char" src="${CH.excited}" style="width:740px;position:static;transform:translateY(${bob}px)"/>
+      </div>`;
+  }},
+  // 27-30s 结尾 CTA：点赞 + GitHub Star（不展示收款码）
+  { t0:27.0, t1:30.0, name:'cta', draw(p,t,said,sp){
+      const bob=Math.sin(p*Math.PI*4)*16;
+      const o1=clamp((p-0.35)/0.25,0,1);
+      return `<div class="scene" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:44px;padding-bottom:90px">
+        <div style="display:flex;align-items:center;gap:24px">
+          <span style="font-size:120px;line-height:1">⭐</span>
+          ${spoken(sp,74,{pad:90,style:'text-align:left;flex:1'})}
+        </div>
+        <div style="display:flex;align-items:center;gap:26px;background:rgba(18,26,42,.9);border:2px solid rgba(94,231,255,.4);border-radius:32px;padding:40px 48px;width:880px;opacity:${o1};transform:translateY(${(1-ease(o1))*40}px)">
+          <div style="font-size:70px">⭐</div>
+          <div><div style="font-size:54px;font-weight:900">GitHub 仓库点颗星</div>
+          <div style="font-size:32px;color:#8fa0ba;margin-top:8px">github.com/Ling19-YI/coursehelper</div></div>
+        </div>
+        <img class="char" src="${CH.wave}" style="width:420px;position:static;transform:translateY(${bob}px);opacity:${clamp((p-0.5)/0.2,0,1)}"/>
+      </div>`;
+  }},
+];
+
+window.seek=function(t){
+  const cur=scenes.find(s=>t>=s.t0&&t<s.t1)||scenes[scenes.length-1];
+  const p=clamp((t-cur.t0)/(cur.t1-cur.t0),0,1);
+  const sp=speech(t);
+  document.getElementById('stage').innerHTML=`<div class="bg"></div><div class="grid"></div>${cur.draw(p,t,'',sp)}`;
+  document.getElementById('topfill').style.width=(t/DUR*100)+'%';
+  return cur.name;
+};
+window.seek(0);
+</script>
+</body>
+</html>

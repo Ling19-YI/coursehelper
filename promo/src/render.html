@@ -180,27 +180,30 @@ const scenes = [
   }},
   { t0:27.6, t1:30.0, name:'致谢', draw(p){
       const k=ease(clamp(p/0.35,0,1));
-      const qr=clamp((p-0.12)/0.25,0,1);
+      const star=clamp((p-0.12)/0.25,0,1);
       return `
-      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:90px">
-        <div style="text-align:center">
-          <div style="display:flex;align-items:center;gap:20px;opacity:${k}">
-            <img src="${LOGO}" style="width:86px;height:86px;border-radius:24px"/>
-            <span style="font-size:58px;font-weight:800">刷课助手 CourseHelper</span>
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:44px">
+        <div style="display:flex;align-items:center;gap:22px;opacity:${k}">
+          <img src="${LOGO}" style="width:80px;height:80px;border-radius:22px"/>
+          <span style="font-size:52px;font-weight:800">刷课助手 CourseHelper</span>
+        </div>
+        <div style="font-size:76px;font-weight:900;opacity:${clamp((p-0.15)/0.25,0,1)}">
+          喜欢的话，帮忙点个 <span style="color:#ffe14d">赞</span>
+        </div>
+        <div style="display:flex;gap:26px;opacity:${star}">
+          <div class="cardish" style="padding:26px 40px;font-size:30px;color:#cbd5e1">
+            <span style="font-size:44px;vertical-align:-6px">⭐</span>
+            GitHub 仓库点颗星<br/>
+            <span style="font-size:24px;color:#7dd3fc">github.com/Ling19-YI/coursehelper</span>
           </div>
-          <div style="font-size:40px;font-weight:700;color:#a7f3d0;margin-top:34px;opacity:${clamp((p-0.2)/0.25,0,1)}">完全免费 · 无需激活码</div>
-          <div style="font-size:30px;color:#cbd5e1;margin-top:26px;line-height:1.7;opacity:${clamp((p-0.35)/0.3,0,1)}">
-            如果它帮你省下了时间<br/>可以请作者喝杯奶茶 ❤
-          </div>
-          <div style="font-size:22px;color:#64748b;margin-top:28px;opacity:${clamp((p-0.7)/0.25,0,1)}">
-            官网 / GitHub Releases 获取<br/>本工具仅供学习与技术研究，请遵守平台与学校规定
+          <div class="cardish" style="padding:26px 40px;font-size:30px;color:#cbd5e1">
+            <span style="font-size:44px;vertical-align:-6px">💬</span>
+            评论区扣「刷课」<br/>
+            <span style="font-size:24px;color:#8fa0ba">私信发你下载链接</span>
           </div>
         </div>
-        <div style="text-align:center;opacity:${qr};transform:scale(${0.92+0.08*qr})">
-          <div class="cardish" style="padding:26px 26px 18px;background:#fff;border-radius:22px">
-            <img src="../assets/donate.jpg" style="width:320px;display:block;border-radius:12px"/>
-          </div>
-          <div style="margin-top:16px;font-size:22px;color:#94a3b8">微信扫码 · 自愿支持</div>
+        <div style="font-size:22px;color:#64748b;opacity:${clamp((p-0.75)/0.25,0,1)}">
+          完全免费 · 无需激活码<br/>本工具仅供学习与技术研究，请遵守平台与学校规定
         </div>
       </div>`;
   }},
