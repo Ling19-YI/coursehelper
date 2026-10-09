@@ -57,21 +57,45 @@ function judgeAnswer(a: string): 'right' | 'wrong' | null {
 const SNAP_TOLERANCE = 80;
 
 /**
+ * 超星测验的可点击选择项选择器。
+ *
+ * 实测真实作业 DOM（1.3 Assignment）：
+ *   <input type="radio"> 数量为 0，选项是自定义组件：
+ *   <li class="... before-after" onclick="addChoice(this);" qid="..." qtype="0"
+ *       role="radio" aria-label="A attainable选择" aria-checked="true">
+ *     <label class="fl before"><span class="num_option choice404763407" data="A">A</span></label>
+ *     <a class="fl after"><p>attainable</p></a>
+ *   </li>
+ * 因此必须覆盖 li[role=radio] / [aria-label^=X] / .num_option / .before-after。
+ */
+const OPTION_SELECTORS = [
+  'li[role="radio"]',
+  'li[role="checkbox"]',
+  '[role="radio"][aria-label]',
+  '[role="checkbox"][aria-label]',
+  '.num_option',
+  '.before-after',
+  'input[type="radio"]',
+  'input[type="checkbox"]',
+];
+
+/**
  * 把模型给出的坐标吸附到最近的选项元素再点击。
  *
- * 直接按坐标点击不可靠：超星 radio 圆圈仅 13x13px，模型坐标常有 50-200px 偏差，
- * 实测会点空。改为在容器内找到离坐标最近的 radio/checkbox（连同其 label），
- * 用元素点击命中率高得多。
- *
- * @returns 点击结果；未找到合适元素返回 false
+ * 直接按坐标点击不可靠：超星选项圆圈仅 32x32px，模型坐标常有 50-200px 偏差。
+ * 改为在容器内找到离坐标最近的选项（含自定义 li[role=radio] 与原生 input），
+ * 点击其中心。
  */
 async function clickOptionNearPoint(
   page: Page,
   box: Rect | null,
   x: number,
-  y: number
+  y: number,
+  scope?: Locator | null
 ): Promise<{ ok: boolean; snapped: boolean; dist: number }> {
-  // 容器内搜索：局部截图时坐标是容器内坐标，需要平移到页面坐标
+  // 优先用题目容器 locator 实时限定范围；
+  // 缓存的 box 会在填空等操作引起布局位移后失效，导致候选被误排除
+  const useScope = scope ?? null;
   const originX = box ? box.x : 0;
   const originY = box ? box.y : 0;
   const targetX = originX + x;
@@ -79,22 +103,29 @@ async function clickOptionNearPoint(
 
   let best: { x: number; y: number; dist: number } | null = null;
 
-  // 遍历可见的 radio / checkbox，用 label 或自身作为点击目标
-  const handles = await page
-    .locator('input[type="radio"], input[type="checkbox"]')
-    .all()
-    .catch(() => []);
-  for (const inp of handles) {
-    if (!(await inp.isVisible().catch(() => false))) continue;
-    const b = await inp.boundingBox().catch(() => null);
-    if (!b || b.width <= 0 || b.height <= 0) continue;
-    const cx = b.x + b.width / 2;
-    const cy = b.y + b.height / 2;
-    const d = Math.hypot(cx - targetX, cy - targetY);
-    if (!best || d < best.dist) best = { x: cx, y: cy, dist: d };
+  for (const sel of OPTION_SELECTORS) {
+    const root = useScope ?? page;
+    const handles = await root.locator(sel).all().catch(() => []);
+    for (const h of handles) {
+      if (!(await h.isVisible().catch(() => false))) continue;
+      const b = await h.boundingBox().catch(() => null);
+      if (!b || b.width <= 0 || b.height <= 0) continue;
+      const cx = b.x + b.width / 2;
+      const cy = b.y + b.height / 2;
+      // 无 scope 时用矩形限定，避免吸附到相邻题目的选项
+      if (
+        !useScope &&
+        box &&
+        (cx < box.x - 4 || cx > box.x + box.width + 4 || cy < box.y - 4 || cy > box.y + box.height + 4)
+      ) {
+        continue;
+      }
+      const d = Math.hypot(cx - targetX, cy - targetY);
+      if (!best || d < best.dist) best = { x: cx, y: cy, dist: d };
+    }
+    if (best && best.dist <= SNAP_TOLERANCE) break;
   }
 
-  // 在容差内命中选项 → 用鼠标点其中心（label 区域也能触发 radio）
   if (best && best.dist <= SNAP_TOLERANCE) {
     try {
       await page.mouse.click(best.x, best.y);
@@ -104,7 +135,6 @@ async function clickOptionNearPoint(
     }
   }
 
-  // 兜底：直接按坐标点
   try {
     await page.mouse.click(targetX, targetY);
     return { ok: true, snapped: false, dist: best?.dist ?? Infinity };
@@ -370,12 +400,18 @@ export async function runAgent(
       if (isJudge) {
         if (await clickJudgeByText(page, a.answer)) hits = 1;
         else if (a.points.length) {
-          const r = await clickOptionNearPoint(page, box, a.points[0].x, a.points[0].y);
+          const r = await clickOptionNearPoint(
+            page, box, a.points[0].x, a.points[0].y,
+            page.locator(`${container} >> nth=${(a.q || 1) - 1}`)
+          );
           if (r.ok) { hits = 1; lastDist = r.dist; }
         }
       } else {
         for (const pt of a.points) {
-          const r = await clickOptionNearPoint(page, box, pt.x, pt.y);
+          const r = await clickOptionNearPoint(
+            page, box, pt.x, pt.y,
+            page.locator(`${container} >> nth=${(a.q || 1) - 1}`)
+          );
           if (r.ok) { hits++; lastDist = r.dist; }
           await deps.sleep(200);
         }
