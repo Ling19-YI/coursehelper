@@ -273,6 +273,29 @@ export async function login(page: Page, h: EngineHooks, username: string, passwo
   await phone.fill(username, { timeout: 10000 });
   await page.locator('#pwd').fill(password, { timeout: 10000 });
 
+  // 超星登录页有 anti-autofill 逻辑，可能在填充后清空输入框。
+  // 不校验就点登录的话，页面只会提示「请输入手机号」而无任何跳转，
+  // 最终表现为干等 20 秒后误报「账号密码错误」。这里填完即校验并重试。
+  const readValues = () =>
+    page.evaluate(() => ({
+      phone: ((document.querySelector('#phone') as HTMLInputElement)?.value || '').trim(),
+      pwd: ((document.querySelector('#pwd') as HTMLInputElement)?.value || '').trim(),
+    }));
+
+  let vals = await readValues();
+  for (let attempt = 0; attempt < 3 && (!vals.phone || !vals.pwd); attempt++) {
+    if (attempt > 0) {
+      h.log('warn', `   账号框被页面清空，第 ${attempt + 1} 次重新填写`);
+      await h.ctl.sleep(600);
+      await phone.fill(username, { timeout: 8000 }).catch(() => {});
+      await page.locator('#pwd').fill(password, { timeout: 8000 }).catch(() => {});
+      vals = await readValues();
+    }
+  }
+  if (!vals.phone || !vals.pwd) {
+    throw new Error('账号或密码未能填入登录框（学习通页面可能在干扰自动填写），请稍后重试');
+  }
+
   // 登录页要求先勾选《隐私政策》《用户协议》，否则点登录无任何反应（不跳转不报错）
   const agree = page.locator('.check-input, .checkbox, [class*="check-input"]').first();
   if (await agree.count().catch(() => 0)) {

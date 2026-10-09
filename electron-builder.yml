@@ -2,9 +2,15 @@ appId: com.coursehelper.desktop
 productName: 刷课助手 CourseHelper
 directories:
   output: release
+# 必须用精确白名单：早前用 app/dist/**/* 会把本地探针产物
+# （probe-*.mjs、真实作业截图、内含真实密钥与本机绝对路径）打进安装包
 files:
-  - app/dist/**/*
-  - app/renderer/**/*
+  - app/dist/main/**
+  - app/dist/preload/**
+  - app/dist/spike.js
+  - app/dist/package.json
+  - app/dist/browsers.json
+  - app/renderer/**
   - package.json
 asar: true
 win:
