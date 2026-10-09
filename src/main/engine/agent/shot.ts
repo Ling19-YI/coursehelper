@@ -94,12 +94,14 @@ function viewportOf(t: ShootTarget): { width: number; height: number } {
  * 截图并可选脱敏。
  * - selector 存在则局部截图，坐标相对容器（iframe 偏移自动消失）
  * - redact 为 true 时遮挡姓名条 / 头像 / 二维码
+ * - strict 为 true 时，selector 定位失败直接返回 null 而不回退全屏
+ *   （逐题截图时必须用 strict，否则 nth 越界会退化成全屏截图，浪费且坐标错位）
  */
 export async function captureQuizShot(
   target: ShootTarget,
-  opts: { selector?: string; redact?: boolean } = {}
+  opts: { selector?: string; redact?: boolean; strict?: boolean } = {}
 ): Promise<QuizShot | null> {
-  const { selector, redact } = opts;
+  const { selector, redact, strict } = opts;
   const page = target as Page;
   const frame = target as Frame;
   const isFrame = typeof (target as Frame).evaluate === 'function' && !(target as Page).viewportSize;
@@ -122,7 +124,8 @@ export async function captureQuizShot(
       const buf = await shoot(() => loc.screenshot(SHOT_OPTS));
       if (redact) await clearRedactions(page);
       if (buf) return { jpeg: buf.toString('base64'), w, h, cropped, selector: used, redacted };
-      // 局部失败则回退全屏
+      // 局部失败则回退全屏；strict 模式直接放弃（逐题截图必须用）
+      if (strict) return null;
     }
   }
 

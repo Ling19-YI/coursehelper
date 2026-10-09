@@ -78,6 +78,10 @@ export interface AppSettings {
   videoSpeed: number;
   /** AI 答题总开关 */
   agentEnabled: boolean;
+  /** 多模态接口地址（OpenAI 兼容） */
+  visionBaseUrl: string;
+  /** 多模态模型名 */
+  visionModel: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -87,4 +91,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dataDir: '',
   videoSpeed: 1,
   agentEnabled: false,
+  visionBaseUrl: 'https://tokendance.space/gateway/v1',
+  visionModel: 'mimo-v2.6-flash',
 };

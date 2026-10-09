@@ -2,12 +2,22 @@ import type { Page } from 'playwright';
 import { forcePlay, wakeUp, installPauseSpy, setVideoRate } from './keepalive';
 import type { EngineHooks } from './hooks';
 import { handleQuizPopup } from './quiz';
+import { runAgent, quizGoal } from './agent/loop';
 
 export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
 
 /** Agent 是否可接管：总开关 + 视觉服务已配置，缺一不可 */
 export function agentUsable(h: EngineHooks): boolean {
-  return h.agentEnabled() && !!h.visionKey();
+  return h.agentEnabled() && !!h.vision().apiKey;
+}
+
+/** 检测到题目容器则返回其选择器（超星每题独立 .TiMu） */
+async function findQuizSelector(page: import('playwright').Page): Promise<string | null> {
+  for (const sel of ['.TiMu', '.TiDu', '[class*="TiMu"]', '[class*="TiDu"]', '#divVideoQuestion', '.layui-layer']) {
+    const n = await page.locator(sel).count().catch(() => 0);
+    if (n > 0) return sel;
+  }
+  return null;
 }
 
 function rethrowIfStopped(h: EngineHooks, e: unknown) {
@@ -116,9 +126,37 @@ export async function waitForVideoEnd(
       lastUrl = currentUrl;
     }
 
-    // 随堂练习弹窗：视频中途弹题会让视频暂停，所以先检测并答题，再看视频状态
+    // 随堂练习/测验：视频中途弹题会让视频暂停，先检测并答题，再看视频状态
     // 答题期间冻结 stall 计时，否则会把「正在答题」误判为卡住
-    if (useAgent && apiKey) {
+    if (useAgent) {
+      const sel = await findQuizSelector(page);
+      if (sel) {
+        stall.freeze(true);
+        try {
+          h.log('info', '    → 检测到题目，启动 AI 答题');
+          const r = await runAgent(h.vision(), page, quizGoal(sel), {
+            log: (l, m) => h.log(l, m),
+            checkpoint: () => ctl.throwIfStopped(),
+            sleep: ms => ctl.sleep(ms),
+          });
+          if (r.clicked > 0) {
+            quizPopups += 1;
+            quizAnswered += r.clicked;
+            h.log('ok', `    ✓ AI 答题完成（${r.answered} 题 / ${r.clicked} 次点击 / ${(r.ms / 1000).toFixed(0)}s）`);
+            await setVideoRate(page, Math.min(2, Math.max(1, h.speed() || 1)));
+            await installPauseSpy(page);
+          } else {
+            h.log('warn', `    ⚠ AI 未点中任何选项（${r.reason}）`);
+          }
+        } catch (e) {
+          rethrowIfStopped(h, e);
+          h.log('warn', `⚠ 答题异常：${(e as any)?.message || e}`);
+        } finally {
+          stall.reset();
+        }
+      }
+    } else if (apiKey) {
+      // 未开 Agent 开关时回退到纯文本答题
       stall.freeze(true);
       try {
         const popup = await handleQuizPopup(page, h, apiKey);

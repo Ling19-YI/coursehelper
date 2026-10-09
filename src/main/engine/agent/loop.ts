@@ -14,8 +14,12 @@ export interface AgentGoal {
   name: string;
   /** 给日志看的说明 */
   describe: string;
-  /** 弹窗容器选择器（存在则局部截图，坐标相对容器） */
-  containerSelector?: string;
+  /** 完成判定用的容器（通常为弹窗容器）；题目容器另行自动探测 */
+  doneSelector?: string;
+  /** 显式指定题目容器；不填则自动探测 .TiMu 等 */
+  questionSelector?: string;
+  /** 最多处理多少题 */
+  maxQuestions?: number;
   /** 完成判定 */
   done(ctx: AgentCtx): Promise<boolean>;
   budget: { maxSteps: number; maxMs: number };
@@ -151,11 +155,63 @@ async function clickSubmit(page: Page): Promise<boolean> {
   return false;
 }
 
+/** 每批送模型的题数（实测 4 题稳定，再多易输出截断） */
+const BATCH_SIZE = 4;
+
+/**
+ * 逐题截图。
+ * 超星每道题是独立的 .TiMu 容器；把整份作业拼成一张长图会因为长宽比过大
+ * （实测 1:10，缩到 240px 宽仍 0 题）而完全读不出来，所以必须每题一图。
+ */
+async function shootEachQuestion(
+  page: Page,
+  container: string,
+  maxQ: number
+): Promise<Array<{ shot: QuizShot; q: number }>> {
+  const total = await page.locator(container).count().catch(() => 0);
+  const out: Array<{ shot: QuizShot; q: number }> = [];
+  const limit = Math.min(total || 0, maxQ);
+  for (let i = 0; i < limit; i++) {
+    // strict：定位失败必须返回 null，否则会退化成全屏截图（坐标与题目对不上）
+    const shot = await captureQuizShot(page, { selector: `${container} >> nth=${i}`, strict: true });
+    if (!shot) continue;
+    // 末节点常是提交区而非题目（异常高），跳过
+    if (shot.h > 1200) continue;
+    out.push({ shot, q: i + 1 });
+  }
+  return out;
+}
+
+/** 找题目容器选择器 */
+async function findQuizContainer(page: Page): Promise<string | null> {
+  for (const sel of ['.TiMu', '.TiDu', '[class*="TiMu"]', '[class*="TiDu"]', '[class*="question"]', '[class*="TiMu_"]']) {
+    const n = await page.locator(sel).count().catch(() => 0);
+    if (n > 0) return sel;
+  }
+  return null;
+}
+
+/** 逐题取容器矩形（把题内坐标换算到页面坐标） */
+async function captureQuestionBoxes(
+  page: Page,
+  container: string,
+  maxQ: number
+): Promise<Map<number, Rect>> {
+  const map = new Map<number, Rect>();
+  for (let i = 0; i < maxQ; i++) {
+    try {
+      const b = await page.locator(`${container} >> nth=${i}`).boundingBox();
+      if (b) map.set(i + 1, b);
+    } catch {}
+  }
+  return map;
+}
+
 /**
  * 运行一个 Agent 目标。
  *
- * 采用「一次截图 → 一次模型调用 → 批量点击 → 提交」的批处理策略：
- * 视觉调用 12-21s，逐步交互会让限时测验超时。
+ * 策略：逐题截图 → 分批送模型 → 坐标吸附点击 → 提交。
+ * 不做逐步交互：实测单次视觉调用 14-38s，逐步交互必然压垮限时测验。
  */
 export async function runAgent(
   cfg: VisionConfig,
@@ -183,51 +239,57 @@ export async function runAgent(
   };
 
   try {
-    // 1) 定位容器并截图
-    if (goal.containerSelector) {
-      const loc = page.locator(goal.containerSelector).first();
-      if (await loc.count().catch(() => 0)) {
-        ctx.box = await loc.boundingBox();
+    // 1) 找题目容器（超星为 .TiMu，每题独立容器）
+    const container = goal.questionSelector || (await findQuizContainer(page));
+    if (!container) {
+      return { ok: false, answered: 0, clicked: 0, steps, ms: Date.now() - t0, reason: '未找到题目容器' };
+    }
+
+    // 2) 逐题截图
+    const perQ = await shootEachQuestion(page, container, goal.maxQuestions ?? 20);
+    steps++;
+    deps.checkpoint();
+    if (!perQ.length) {
+      return { ok: false, answered: 0, clicked: 0, steps, ms: Date.now() - t0, reason: '题目截图失败' };
+    }
+    deps.log('info', `  识别到 ${perQ.length} 题（${container}）`);
+
+    // 3) 分批送模型（每批一次请求携带多张题图）
+    const answers: QuizAnswer[] = [];
+    for (let i = 0; i < perQ.length; i += BATCH_SIZE) {
+      deps.checkpoint();
+      const batch = perQ.slice(i, i + BATCH_SIZE).map(p => ({ ...p.shot, q: p.q }));
+      const bt = Date.now();
+      try {
+        const got = await askQuizByVision(cfg, batch, { maxMs: goal.budget.maxMs });
+        answers.push(...got);
+        steps++;
+        deps.log(
+          'info',
+          `  AI 批次 Q${batch[0].q}-${batch[batch.length - 1].q} → ${got.length} 题（${((Date.now() - bt) / 1000).toFixed(1)}s）`
+        );
+      } catch (e: any) {
+        steps++;
+        deps.log(
+          'warn',
+          `  批次 Q${batch[0].q}-${batch[batch.length - 1].q} 失败：${String(e?.message || e).slice(0, 50)}`
+        );
       }
     }
-    ctx.shot = await captureQuizShot(page, {
-      selector: ctx.box ? goal.containerSelector : undefined,
-      redact: true,
-    });
-    if (!ctx.shot) {
-      return { ok: false, answered: 0, clicked: 0, steps, ms: Date.now() - t0, reason: '截图失败' };
-    }
-    if (!ctx.box) {
-      ctx.shot.cropped = false;
-    }
-    steps++;
-    deps.log(
-      'info',
-      `  截图 ${ctx.shot.w}x${ctx.shot.h}${ctx.shot.cropped ? '（局部）' : '（全屏）'}` +
-        (ctx.shot.redacted.length ? `，已脱敏 ${ctx.shot.redacted.length} 处` : '')
-    );
-
-    deps.checkpoint();
-    if (Date.now() - t0 > goal.budget.maxMs) {
-      return { ok: false, answered, clicked, steps, ms: Date.now() - t0, reason: '截图后已超时' };
-    }
-
-    // 2) 一次调用答完所有题
-    const answers: QuizAnswer[] = await askQuizByVision(cfg, ctx.shot, { maxMs: goal.budget.maxMs });
-    steps++;
-    deps.checkpoint();
-    const callMs = Date.now() - t0;
-    deps.log('info', `  AI 返回 ${answers.length} 题（${(callMs / 1000).toFixed(1)}s）`);
     answered = answers.length;
+    if (!answers.length) {
+      return { ok: false, answered, clicked, steps, ms: Date.now() - t0, reason: '模型未给出任何答案' };
+    }
 
-    // 3) 批量点击（多选题要点多个位置）
+    // 4) 批量点击（多选题要点多个位置）
+    const boxes = await captureQuestionBoxes(page, container, perQ.length);
     for (const a of answers) {
       deps.checkpoint();
       if (a.answer === '?') {
         deps.log('info', `    Q${a.q} 跳过（模型不确定）`);
         continue;
       }
-      // 判断题：坐标常不可靠，先试文本匹配
+      const box = boxes.get(a.q) || null;
       const isJudge = /^(对|错|正确|错误)$/.test(a.answer.trim());
       let hits = 0;
       let lastDist = 0;
@@ -235,14 +297,12 @@ export async function runAgent(
       if (isJudge) {
         if (await clickJudgeByText(page, a.answer)) hits = 1;
         else if (a.points.length) {
-          const r = await clickOptionNearPoint(page, ctx.box, a.points[0].x, a.points[0].y);
+          const r = await clickOptionNearPoint(page, box, a.points[0].x, a.points[0].y);
           if (r.ok) { hits = 1; lastDist = r.dist; }
         }
       } else {
-        // 单选/多选/填空：每个坐标都要点
-        const pts = a.points.length ? a.points : [];
-        for (const pt of pts) {
-          const r = await clickOptionNearPoint(page, ctx.box, pt.x, pt.y);
+        for (const pt of a.points) {
+          const r = await clickOptionNearPoint(page, box, pt.x, pt.y);
           if (r.ok) { hits++; lastDist = r.dist; }
           await deps.sleep(200);
         }
@@ -250,12 +310,12 @@ export async function runAgent(
 
       if (hits > 0) {
         clicked += hits;
-        const snap = lastDist > 25 && lastDist !== Infinity ? `（坐标吸附 ${Math.round(lastDist)}px）` : '';
+        const snap = lastDist > 25 && lastDist !== Infinity ? `（吸附 ${Math.round(lastDist)}px）` : '';
         deps.log('info', `    Q${a.q} ${a.answer} ✓${hits > 1 ? ` ×${hits}` : ''}${snap}`);
       } else {
         deps.log('warn', `    Q${a.q} ${a.answer} 点击失败`);
       }
-      await deps.sleep(300);
+      await deps.sleep(250);
     }
 
     // 4) 提交
@@ -279,17 +339,22 @@ export async function runAgent(
   }
 }
 
-/** 测验目标：提交后弹窗消失即视为完成 */
-export function quizGoal(containerSelector?: string): AgentGoal {
+/**
+ * 测验目标：提交后弹窗消失即视为完成。
+ * doneSelector 只用于完成判定，题目容器由 findQuizContainer 自动探测
+ * （超星每道题是独立的 .TiMu，二者不能混用）。
+ */
+export function quizGoal(doneSelector?: string): AgentGoal {
   return {
     name: 'quiz',
     describe: '回答测验并提交',
-    containerSelector,
-    budget: { maxSteps: 8, maxMs: 90000 },
+    doneSelector,
+    maxQuestions: 20,
+    budget: { maxSteps: 40, maxMs: 300000 },
     done: async ctx => {
-      if (!containerSelector) return true;
+      if (!doneSelector) return true;
       try {
-        const loc = ctx.page.locator(containerSelector).first();
+        const loc = ctx.page.locator(doneSelector).first();
         // 注意：display:none 的元素 count() 仍为 1，必须判断可见性
         return !(await loc.isVisible().catch(() => false));
       } catch {

@@ -29,8 +29,8 @@ export interface EngineOptions {
   getVideoSpeed(): number;
   /** AI 答题总开关 */
   getAgentEnabled(): boolean;
-  /** 多模态视觉服务 key */
-  getVisionKey(): string;
+  /** 多模态视觉服务配置 */
+  getVision(): { baseUrl: string; apiKey: string; model: string };
 }
 
 const clean = (s: string) => s.replace(/\n/g, ' ').trim();
@@ -66,7 +66,7 @@ export class ChaoxingEngine {
         return isNaN(r) ? 1 : Math.min(2, Math.max(1, r));
       },
       agentEnabled: () => !!opts.getAgentEnabled(),
-      visionKey: () => String(opts.getVisionKey() || ''),
+      vision: () => opts.getVision(),
     };
   }
 

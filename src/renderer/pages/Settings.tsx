@@ -25,6 +25,8 @@ export default function Settings() {
   const [speed, setSpeed] = useState<number>(1);
   const [agentOn, setAgentOn] = useState(false);
   const [visionKey, setVisionKey] = useState('');
+  const [visionBaseUrl, setVisionBaseUrl] = useState('https://tokendance.space/gateway/v1');
+  const [visionModel, setVisionModel] = useState('mimo-v2.6-flash');
   const [visionInfo, setVisionInfo] = useState<{ configured: boolean; hint: string }>({
     configured: false,
     hint: '',
@@ -36,6 +38,8 @@ export default function Settings() {
       setKey(a.settings.deepseekKey ?? '');
       setDataDir(a.settings.dataDir ?? '');
       setSpeed(Number(a.settings.videoSpeed) || 1);
+      setVisionBaseUrl(a.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1');
+      setVisionModel(a.settings.visionModel || 'mimo-v2.6-flash');
       setAgentOn(!!a.settings.agentEnabled);
     }
     if (a.username) setUsername(a.username);
@@ -68,6 +72,8 @@ export default function Settings() {
         dataDir: dataDir.trim(),
         videoSpeed: speed,
         agentEnabled: agentOn,
+        visionBaseUrl: visionBaseUrl.trim(),
+        visionModel: visionModel.trim() || 'mimo-v2.6-flash',
       });
       window.ch.getVision().then(setVisionInfo).catch(() => {});
       message.success('设置已保存');
@@ -146,12 +152,29 @@ export default function Settings() {
         <div className="muted" style={{ margin: '6px 0 10px' }}>
           用于看图答题。仅保存在本机（系统加密），不会上传或写入配置文件。
         </div>
-        <Input.Password
-          placeholder={visionInfo.configured ? `已保存 ${visionInfo.hint}，留空则不修改` : 'sk-...'}
-          value={visionKey}
-          onChange={e => setVisionKey(e.target.value)}
-          autoComplete="off"
-        />
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Input.Password
+            placeholder={visionInfo.configured ? `已保存 ${visionInfo.hint}，留空则不修改` : 'sk-...'}
+            value={visionKey}
+            onChange={e => setVisionKey(e.target.value)}
+            autoComplete="off"
+          />
+          <Input
+            placeholder="接口地址"
+            value={visionBaseUrl}
+            onChange={e => setVisionBaseUrl(e.target.value)}
+            autoComplete="off"
+          />
+          <Input
+            placeholder="模型名"
+            value={visionModel}
+            onChange={e => setVisionModel(e.target.value)}
+            autoComplete="off"
+          />
+        </Space>
+        <div className="muted" style={{ marginTop: 8 }}>
+          接口需兼容 OpenAI 格式（/chat/completions）。单次会逐题截图分批发送，题越多耗时越长。
+        </div>
       </div>
 
       <div className="cardish">

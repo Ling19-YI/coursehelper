@@ -17,6 +17,6 @@ export interface EngineHooks {
   speed(): number;
   /** AI 答题总开关（用户可控） */
   agentEnabled(): boolean;
-  /** 多模态视觉服务 key，未配置则 Agent 不接管 */
-  visionKey(): string;
+  /** 多模态视觉服务配置；key 为空则 Agent 不接管 */
+  vision(): { baseUrl: string; apiKey: string; model: string };
 }

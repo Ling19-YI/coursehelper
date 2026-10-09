@@ -86,57 +86,90 @@ function extractAnswers(raw: string): QuizAnswer[] {
   return [];
 }
 
-/** 调用多模态模型，传入截图，返回结构化答案 */
+/** 一张题图 */
+export interface ShotInput {
+  jpeg: string;
+  w: number;
+  h: number;
+  cropped?: boolean;
+  /** 该图对应的题号，用于多图批处理时对齐 */
+  q?: number;
+}
+
+/**
+ * 调用多模态模型作答。
+ *
+ * 实测（真实 16 题作业，总高 7959px）：
+ * - 整份作业拼成一张长图 → 等比缩到 240px 宽仍返回 0 题（长宽比 1:10，视觉模型读不出）
+ * - 单图超 8 题 → max_tokens 被推理过程吃光，输出截断
+ * 因此必须「每题一图」并分批发送；一次请求可携带多张图，显著减少往返。
+ */
 export async function askQuizByVision(
   cfg: VisionConfig,
-  shot: { jpeg: string; w: number; h: number; cropped: boolean },
+  shots: ShotInput | ShotInput[],
   opts: { maxMs?: number } = {}
 ): Promise<QuizAnswer[]> {
   const started = Date.now();
+  const list = Array.isArray(shots) ? shots : [shots];
+  if (!list.length) throw new Error('未提供截图');
+
+  // 多图时明确标出每张图对应的题号，避免模型把题号错位
+  const imageDesc =
+    list.length === 1
+      ? `下面这张图包含第 ${list[0].q ?? 1} 题起的题目`
+      : `下面依次是第 ${list.map((s, i) => s.q ?? i + 1).join('、')} 题的图片，每张图一道题`;
+
+  const content: any[] = [
+    {
+      type: 'text',
+      text:
+        `${imageDesc}。请回答这些题目。\n` +
+        '输出格式：\n' +
+        '  单选/判断：[{"q":1,"answer":"A","points":[{"x":120,"y":300}]}]\n' +
+        '  多选（每个正确选项都要给一个坐标）：[{"q":2,"answer":"AC","points":[{"x":80,"y":200},{"x":80,"y":320}]}]\n' +
+        '规则：\n' +
+        '1. q 用题目自身的题号（题干前的数字），不要重新编号\n' +
+        '2. answer 单选给一个字母，多选给多个字母如 "AC"，判断题给 "对" 或 "错"，填空题给要填的内容\n' +
+        '3. points 的坐标基于「该题所在那张图」的尺寸（各图尺寸见下方），取正确选项的正中间\n' +
+        '4. 判断题不要给坐标（系统按文本匹配）\n' +
+        '5. 完全无法确定时 answer 填 "?"\n' +
+        '6. 只输出JSON，不要任何解释文字\n' +
+        '图片尺寸：' +
+        list.map((s, i) => `图${i + 1}=${s.w}x${s.h}`).join('，'),
+    },
+    ...list.map((s, i) => ({
+      type: 'image_url',
+      image_url: { url: `data:image/jpeg;base64,${s.jpeg}` },
+    })),
+  ];
+
   const body = {
     model: cfg.model,
     messages: [
       {
         role: 'system',
-        content:
-          '你是超星学习通测验答题专家。看图作答，擅长英语、医学、马克思主义、护理、计算机等课程。' +
-          '严格只输出JSON数组，不要任何其他文字或解释。',
+        content: '你是超星学习通测验答题专家。看图作答，擅长英语、医学、马克思主义、护理、计算机等课程。严格只输出JSON数组。',
       },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text:
-              '请看这张测验截图并回答所有题目。\n' +
-              '输出格式：\n' +
-              '  单选/判断：[{"q":1,"answer":"A","x":120,"y":300}]\n' +
-              '  多选（每个正确选项都要给一个坐标）：[{"q":2,"answer":"AC","points":[{"x":80,"y":200},{"x":80,"y":320]}]\n' +
-              '规则：\n' +
-              '1. q 是题号，从 1 开始，按页面从上到下顺序\n' +
-              '2. answer 单选给一个字母，多选给多个字母如 "AC"，判断题给 "对" 或 "错"，填空题给要填的内容\n' +
-              `3. 坐标必须基于这张图片的尺寸 ${shot.w}x${shot.h}，取正确选项的正中间，不要取题目文字位置\n` +
-              '4. 判断题不要给坐标（系统会按文本匹配），其余题型用 points 或 x/y\n' +
-              '5. 完全无法确定时 answer 填 "?"\n' +
-              '6. 只输出JSON，不要任何解释文字',
-          },
-          {
-            type: 'image_url',
-            image_url: { url: `data:image/jpeg;base64,${shot.jpeg}` },
-          },
-        ],
-      },
+      { role: 'user', content },
     ],
     temperature: 0,
     // 速度/准确权衡（实测 4 题截图）：
     //   none →  4.2s，但多选变全选、判断题答反，准确率不可用
     //   low  → 16.7s，准确率可用
-    // 选 low：答题正确率优先，由调用方通过分批控制总耗时。
-    // 若换用非思维链模型，此参数会被忽略。
-    reasoning_effort: 'low' as const,
+    reasoning_effort: (cfg.effort ?? 'low') as 'low' | 'none',
     max_tokens: 3000,
   };
 
+  const parsed = await callOnce(cfg, list, opts, body);
+
+  if (!parsed.length) {
+    throw new Error(`模型未返回答案（${((Date.now() - started) / 1000).toFixed(1)}s）`);
+  }
+  return parsed;
+}
+
+/** 单次调用 */
+async function callOnce(cfg: VisionConfig, list: ShotInput[], _opts: any, body: any): Promise<QuizAnswer[]> {
   const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
@@ -149,19 +182,13 @@ export async function askQuizByVision(
   const choice = json?.choices?.[0];
   const raw: string = choice?.message?.content || '';
   const finish = choice?.finish_reason || '';
-  const ms = Date.now() - started;
-
   const parsed = extractAnswers(raw);
-
-  if (!parsed.length) {
-    const why =
-      finish === 'length'
-        ? '输出被截断（思考过程占用预算），建议减少题目或换更快的模型'
-        : raw
-          ? `未找到 JSON：${raw.substring(0, 50)}`
-          : '空响应';
-    throw new Error(`模型未返回答案（${(ms / 1000).toFixed(1)}s，${why}）`);
+  if (!parsed.length && finish === 'length' && !_opts.__retried) {
+    // 输出被截断：提高 max_tokens 重试一次
+    body.max_tokens = Math.min(6000, (body.max_tokens || 3000) * 2);
+    body.messages[1].content[0].text +=
+      '\n注意：上一轮输出被截断，请务必只输出JSON，note 字段不要写，务必给全部题目作答。';
+    return callOnce(cfg, list, { ..._opts, __retried: true }, body);
   }
-
   return parsed;
 }

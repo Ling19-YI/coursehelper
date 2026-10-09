@@ -39,7 +39,11 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
       getDeepseekKey: () => store.settings.deepseekKey,
       getVideoSpeed: () => Number(store.settings.videoSpeed) || 1,
       getAgentEnabled: () => !!store.settings.agentEnabled,
-      getVisionKey: () => store.loadVisionKey() ?? '',
+      getVision: () => ({
+        baseUrl: store.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1',
+        apiKey: store.loadVisionKey() ?? '',
+        model: store.settings.visionModel || 'mimo-v2.6-flash',
+      }),
     });
     engineDataDir = dataDir;
     return engine;
