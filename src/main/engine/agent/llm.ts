@@ -12,10 +12,15 @@ export interface VisionConfig {
 export interface QuizAnswer {
   /** 题号（从 1 开始） */
   q: number;
-  /** 选项字母，如 "A" / "AB"；判断题为 "对"/"错"；填空为文本 */
+  /** 选项字母，如 "A" / "AB"；判断题为 "对"/"错"；填空为待填文本 */
   answer: string;
   /** 需要点击的坐标（截图坐标系）；多选题有多个，全部要点 */
   points: Array<{ x: number; y: number }>;
+  /**
+   * 填空题：按顺序给出每个空要填的内容。
+   * 例：answer="Beijing"（单空）或 answer="北京|上海"（多空，用 | 分隔）
+   */
+  fills?: string[];
   note?: string;
 }
 
@@ -25,7 +30,7 @@ export interface QuizAnswer {
  * - 尾随逗号
  * - 输出被 max_tokens 截断（补齐括号，保留已完整的前 N 题）
  */
-/** 归一化：统一出 points 数组（兼容 points / x+y 两种形态） */
+/** 归一化：统一出 points 数组（兼容 points / x+y 两种形态），并解析 fills */
 function norm(a: any): QuizAnswer | null {
   const q = Number(a?.q) || 0;
   const answer = String(a?.answer ?? '').trim();
@@ -39,10 +44,21 @@ function norm(a: any): QuizAnswer | null {
   if (!pts.length && typeof a?.x === 'number' && typeof a?.y === 'number') {
     pts.push({ x: a.x, y: a.y });
   }
+  // fills：数组或 "甲|乙" 分隔文本均可
+  let fills: string[] | undefined;
+  if (Array.isArray(a?.fills) && a.fills.length) {
+    fills = a.fills.map((f: any) => String(f ?? '').trim()).filter(Boolean);
+  } else if (typeof a?.fills === 'string' && a.fills.trim()) {
+    fills = a.fills.split('|').map((s: string) => s.trim()).filter(Boolean);
+  }
+  if (!fills && /\uff5c|\|/.test(answer)) {
+    fills = answer.split('|').map(s => s.trim()).filter(Boolean);
+  }
   return {
     q,
     answer,
     points: pts,
+    fills: fills && fills.length ? fills : undefined,
     note: a?.note ? String(a.note).slice(0, 80) : undefined,
   };
 }
@@ -125,15 +141,18 @@ export async function askQuizByVision(
       text:
         `${imageDesc}。请回答这些题目。\n` +
         '输出格式：\n' +
-        '  单选/判断：[{"q":1,"answer":"A","points":[{"x":120,"y":300}]}]\n' +
-        '  多选（每个正确选项都要给一个坐标）：[{"q":2,"answer":"AC","points":[{"x":80,"y":200},{"x":80,"y":320}]}]\n' +
+        '  选择题：[{"q":1,"answer":"A","points":[{"x":120,"y":300}]}]\n' +
+        '  多选题：[{"q":2,"answer":"AC","points":[{"x":80,"y":200},{"x":80,"y":320}]}]\n' +
+        '  填空题：[{"q":3,"answer":"北京","fills":["北京"],"points":[]}]\n' +
         '规则：\n' +
         '1. q 用题目自身的题号（题干前的数字），不要重新编号\n' +
-        '2. answer 单选给一个字母，多选给多个字母如 "AC"，判断题给 "对" 或 "错"，填空题给要填的内容\n' +
-        '3. points 的坐标基于「该题所在那张图」的尺寸（各图尺寸见下方），取正确选项的正中间\n' +
-        '4. 判断题不要给坐标（系统按文本匹配）\n' +
-        '5. 完全无法确定时 answer 填 "?"\n' +
-        '6. 只输出JSON，不要任何解释文字\n' +
+        '2. 判断题 answer 给 "对" 或 "错"，且不要给 points（系统按文本匹配）\n' +
+        '3. 填空题（题干里有横线或空白需要输入文字）：不要给 points，' +
+        '把每个空按从左到右的顺序放进 fills 数组；只有一个空时 answer 直接写该空内容\n' +
+        '4. 选择题的 points 坐标基于「该题所在那张图」的尺寸（见下方），取正确选项的正中间\n' +
+        '5. 填空内容用题目的语言作答（中文题填中文，英文题填英文）\n' +
+        '6. 完全无法确定时 answer 填 "?"\n' +
+        '7. 只输出JSON，不要任何解释文字\n' +
         '图片尺寸：' +
         list.map((s, i) => `图${i + 1}=${s.w}x${s.h}`).join('，'),
     },

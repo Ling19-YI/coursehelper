@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page, Locator } from 'playwright';
 import type { QuizShot, Rect } from './shot';
 import { captureQuizShot, toElementPoint } from './shot';
 import { askQuizByVision, type QuizAnswer, type VisionConfig } from './llm';
@@ -126,6 +126,62 @@ async function clickJudgeByText(page: Page, answer: string): Promise<boolean> {
     }
   } catch {}
   return false;
+}
+
+/**
+ * 填空题：把答案填进该题的输入框。
+ *
+ * 限定在该题容器内查找输入框，避免跨题串位。
+ * 超星填空框有 <input> 和 <span contenteditable> 两类，且部分组件监听
+ * input/change 事件，单纯 fill() 可能不被记录，因此填完补派发事件。
+ */
+async function fillBlanks(
+  page: Page,
+  qScope: Locator,
+  fills: string[]
+): Promise<{ found: number; typed: number }> {
+  const inputs = qScope.locator(
+    'input[type="text"], input:not([type]), textarea, [contenteditable="true"], [contenteditable=""]'
+  );
+  const total = await inputs.count().catch(() => 0);
+
+  let typed = 0;
+  const limit = Math.min(fills.length, total);
+  for (let i = 0; i < limit; i++) {
+    const value = String(fills[i] || '').trim();
+    if (!value) continue;
+    const loc = inputs.nth(i);
+    try {
+      const tag = await loc.evaluate((el: Element) => el.tagName.toLowerCase());
+      if (tag === 'input' || tag === 'textarea') {
+        await loc.fill(value, { timeout: 3000 });
+      } else {
+        // contenteditable：pressSequentially 会自动聚焦，
+        // 直接用 click + keyboard.type 在空 span 上常因无文本节点而失败
+        let ok = false;
+        try {
+          await loc.pressSequentially(value, { delay: 12, timeout: 3000 });
+          ok = true;
+        } catch {
+          try {
+            await loc.click({ timeout: 2000 });
+            await page.keyboard.type(value, { delay: 12 });
+            ok = true;
+          } catch {}
+        }
+        if (!ok) continue;
+      }
+      await loc
+        .evaluate((el: any) => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        })
+        .catch(() => {});
+      typed++;
+    } catch {}
+  }
+  return { found: total, typed };
 }
 
 /** 点击提交/确定 */
@@ -291,9 +347,26 @@ export async function runAgent(
       }
       const box = boxes.get(a.q) || null;
       const isJudge = /^(对|错|正确|错误)$/.test(a.answer.trim());
+      // 填空题：模型给了 fills，或该题内根本没有选择控件
+      const isFill = !!a.fills?.length;
       let hits = 0;
       let lastDist = 0;
 
+      if (isFill) {
+        const qScope = page.locator(`${container} >> nth=${(a.q || 1) - 1}`);
+        const res = await fillBlanks(page, qScope, a.fills!);
+        hits = res.typed;
+        if (res.typed > 0) {
+          deps.log('info', `    Q${a.q} 填空 ${a.fills!.slice(0, res.typed).join(' / ')} ✓ ×${res.typed}`);
+        } else if (res.found === 0) {
+          deps.log('warn', `    Q${a.q} 填空题但未找到输入框`);
+        } else {
+          deps.log('warn', `    Q${a.q} 找到 ${res.found} 个输入框但未能写入`);
+        }
+        // 填空题不再走点击分支，避免重复操作与误导性日志
+        await deps.sleep(200);
+        continue;
+      }
       if (isJudge) {
         if (await clickJudgeByText(page, a.answer)) hits = 1;
         else if (a.points.length) {
