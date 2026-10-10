@@ -236,23 +236,41 @@ export async function askDeepSeek(
   const prompt = buildPrompt(questions);
   let lastErr = '';
   for (let attempt = 0; attempt < 3; attempt++) {
-    const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content:
-              '你是超星学习通测验答题专家，擅长医学、马克思主义、护理、计算机等课程知识点。只输出JSON数组。',
-          },
-          { role: 'user', content: prompt },
-        ],
-        temperature: attempt === 0 ? 0.1 : 0.3,
-        max_tokens: 2000,
-      }),
-    });
+    // 同样必须有超时：否则 DeepSeek 不响应时会永久挂起，
+    // 测验页的自动答题会卡在原地，只能强杀进程。
+    const LIMIT_MS = 45000;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
+    let resp: Response;
+    try {
+      resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            {
+              role: 'system',
+              content:
+                '你是超星学习通测验答题专家，擅长医学、马克思主义、护理、计算机等课程知识点。只输出JSON数组。',
+            },
+            { role: 'user', content: prompt },
+          ],
+          temperature: attempt === 0 ? 0.1 : 0.3,
+          max_tokens: 2000,
+        }),
+        signal: ctrl.signal,
+      });
+    } catch (e: any) {
+      clearTimeout(timer);
+      lastErr =
+        e?.name === 'AbortError'
+          ? `DeepSeek 超时（${LIMIT_MS / 1000}s）`
+          : `DeepSeek 连接失败: ${String(e?.message || e).slice(0, 60)}`;
+      await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
+      continue;
+    }
+    clearTimeout(timer);
     if (!resp.ok) {
       lastErr = `DeepSeek API ${resp.status}`;
       if (resp.status === 401 || resp.status === 402) throw new Error(lastErr);
@@ -545,23 +563,38 @@ export async function getQuizFrame(page: Page) {
 }
 
 export async function askDeepSeekForPage(apiKey: string, pageText: string): Promise<any[]> {
-  const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        {
-          role: 'system',
-          content:
-            '\u4f60\u662f\u7b54\u9898\u52a9\u624b\u3002\u5206\u6790\u6d4b\u9a8c\u7f51\u9875\u6587\u672c\uff0c\u9009\u51fa\u6bcf\u9898\u6b63\u786e\u7b54\u6848\u3002\u8fd4\u56deJSON: [{"question":1,"answer":"A","note":"\u89e3\u91ca"}]\u3002answer: \u5355\u9009="A",\u591a\u9009="AB",\u5224\u65ad="\u5bf9"/"\u9519",\u586b\u7a7a\u5199\u6587\u5b57\u3002\u4e0d\u786e\u5b9a\u586b"?"\u3002\u53ea\u8f93\u51faJSON\u3002',
-        },
-        { role: 'user', content: `\u56de\u7b54\u4ee5\u4e0b\u6d4b\u9a8c:\n\n${pageText}` },
-      ],
-      temperature: 0.1,
-      max_tokens: 2000,
-    }),
-  });
+  const LIMIT_MS = 45000;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'system',
+            content:
+              '\u4f60\u662f\u7b54\u9898\u52a9\u624b\u3002\u5206\u6790\u6d4b\u9a8c\u7f51\u9875\u6587\u672c\uff0c\u9009\u51fa\u6bcf\u9898\u6b63\u786e\u7b54\u6848\u3002\u8fd4\u56deJSON: [{"question":1,"answer":"A","note":"\u89e3\u91ca"}]\u3002answer: \u5355\u9009="A", \u591a\u9009="AB", \u5224\u65ad="\u5bf9"/"\u9519", \u586b\u7a7a\u5199\u6587\u5b57\u3002\u4e0d\u786e\u5b9a\u586b"?"\u3002\u53ea\u8f93\u51faJSON\u3002',
+          },
+          { role: 'user', content: `\u56de\u7b54\u4ee5\u4e0b\u6d4b\u9a8c:\n\n${pageText}` },
+        ],
+        temperature: 0.1,
+        max_tokens: 2000,
+      }),
+      signal: ctrl.signal,
+    });
+  } catch (e: any) {
+    clearTimeout(timer);
+    throw new Error(
+      e?.name === 'AbortError'
+        ? `DeepSeek 超时（${LIMIT_MS / 1000}s）`
+        : `DeepSeek 连接失败: ${String(e?.message || e).slice(0, 60)}`
+    );
+  }
+  clearTimeout(timer);
   if (!resp.ok) throw new Error(`DeepSeek API ${resp.status}`);
   const raw = ((await resp.json()) as any).choices?.[0]?.message?.content || '';
   const m = raw.match(/\[[\s\S]*\]/);

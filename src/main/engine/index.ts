@@ -326,11 +326,7 @@ export class ChaoxingEngine {
                   this.log('info', '    - 无视频/无文档，跳过');
                 }
               } else {
-                const r = await waitForVideoEnd(
-                  this.opts.page,
-                  this.hooks,
-                  this.opts.getDeepseekKey()
-                );
+                const r = await waitForVideoEnd(this.opts.page, this.hooks);
                 if (r === 'completed') {
                   this.store.markChapterDone(ensureProgress(), chapter.onclick);
                   summary.completed++;

@@ -33,13 +33,18 @@ async function fetchEnrolledCourses(
   page: Page
 ): Promise<{ list: RawCourse[]; hasMore: boolean; roleSkipped: number } | null> {
   const data = await page.evaluate(async (api: string) => {
+    // 20s 超时：平台接口偶发挂起时不至于让整个取课流程无限等待
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 20000);
     try {
-      const r = await fetch(api, { credentials: 'include' });
+      const r = await fetch(api, { credentials: 'include', signal: ctrl.signal });
+      clearTimeout(timer);
       if (!r.ok) return { err: 'HTTP ' + r.status };
       const j = await r.json();
       if (j?.result !== 1 || !Array.isArray(j.channelList)) return { err: '返回结构异常' };
       return { channelList: j.channelList, hasMore: !!j.hasMore };
     } catch (e) {
+      clearTimeout(timer);
       return { err: String(e) };
     }
   }, MY_COURSE_API);
