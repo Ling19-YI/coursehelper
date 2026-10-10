@@ -78,6 +78,17 @@ export interface AppSettings {
   videoSpeed: number;
   /** AI 答题总开关 */
   agentEnabled: boolean;
+  /**
+   * 交卷前要求的最低答案覆盖率（0~1）。
+   * 低于该值就不交卷，只留给人核对 —— 搜不全硬交等于把确定的错题一起交上。
+   * 0 = 关闭闸门。
+   */
+  submitCoverRate: number;
+  /**
+   * 是否自动回答视频播放期间的随堂题弹窗。
+   * 默认关闭：弹窗出现时视频通常已暂停，自动介入会让「卡住」与「该答题」难以区分。
+   */
+  answerPopup: boolean;
   /** 多模态接口地址（OpenAI 兼容） */
   visionBaseUrl: string;
   /** 多模态模型名 */
@@ -91,6 +102,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   dataDir: '',
   videoSpeed: 1,
   agentEnabled: false,
+  answerPopup: false,
+  submitCoverRate: 0.8,
   visionBaseUrl: 'https://tokendance.space/gateway/v1',
   visionModel: 'mimo-v2.6-flash',
 };

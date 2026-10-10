@@ -1,5 +1,6 @@
 ﻿import type { Page } from 'playwright';
 import { forcePlay, wakeUp, installPauseSpy, setVideoRate } from './keepalive';
+import { handleQuizPopup } from './quiz';
 import type { EngineHooks } from './hooks';
 
 export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
@@ -96,9 +97,29 @@ export async function waitForVideoEnd(page: Page, h: EngineHooks): Promise<Video
       lastUrl = currentUrl;
     }
 
-    // 视频播放期间不再检测/回答随堂题。
-    // 用户要求：播放中遇到题目弹窗不要介入，等 StallGuard 判定卡住后提示即可。
-    // 独立测验页面仍由 engine/index.ts -> handleQuiz 自动答题，不受影响。
+    // 视频播放期间的随堂题弹窗。
+    //
+    // 默认关闭：平台弹窗出现时视频往往已经暂停，此时自动点选会让「卡住」与
+    // 「该答题」两种状态混在一起，且部分课程老师会刻意用弹窗当 Attendance。
+    // 用户可在设置里单独打开；打开后每轮最多处理一次，避免反复探测。
+    let popupHandledThisVideo = false;
+    if (h.answerPopup() && !popupHandledThisVideo) {
+      try {
+        const r = await handleQuizPopup(page, h, h.deepseekKey(), h.visionChannel(), {
+          tiku: h.tiku(),
+          submitCoverRate: h.submitCoverRate(),
+        });
+        if (r.popups) {
+          popupHandledThisVideo = true;
+          h.log('ok', `    ✓ 随堂弹窗已处理（${r.popups} 个，答 ${r.answered} 题，提交 ${r.submitted} 次）`);
+        }
+      } catch (e) {
+        rethrowIfStopped(h, e);
+        const msg = String((e as any)?.message || e);
+        // 弹窗答题失败不该毁掉整个视频任务
+        h.log('warn', `    ⚠ 随堂弹窗处理失败：${msg}`);
+      }
+    }
 
     let videoFound = false;
     for (const frame of page.frames()) {

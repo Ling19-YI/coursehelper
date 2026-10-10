@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "dist": "npm run build && electron-builder",
     "smoke": "node scripts/smoke.mjs",
-    "spike": "node scripts/spike.mjs"
+    "spike": "node scripts/spike.mjs",
+    "test:answer": "tsx scripts/test-answer-chain.ts"
   },
   "devDependencies": {
     "@ant-design/icons": "^6.3.4",

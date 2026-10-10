@@ -16,6 +16,7 @@ import { diagVideo, setMediaPlayback } from './keepalive';
 import { login, getCourses, openCourseChapters, clickChapter, goBackToCourse, getChapters } from './chaoxing';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
+import { TikuStore } from './tiku';
 import { waitForVideo, waitForVideoEnd } from './video';
 import type { ChapterResult } from '../../shared/types';
 import type { EngineHooks } from './hooks';
@@ -31,6 +32,10 @@ export interface EngineOptions {
   getAgentEnabled(): boolean;
   /** 多模态视觉服务配置 */
   getVision(): { baseUrl: string; apiKey: string; model: string };
+  /** 交卷前要求的最低答案覆盖率（0~1，0=关闭） */
+  getSubmitCoverRate(): number;
+  /** 是否自动处理视频播放期间的随堂题弹窗 */
+  getAnswerPopup(): boolean;
 }
 
 const clean = (s: string) => s.replace(/\n/g, ' ').trim();
@@ -42,10 +47,12 @@ export class ChaoxingEngine {
   private loggedIn = false;
   private currentChapter = '';
   private store: ProgressStore;
+  private tiku: TikuStore;
   private hooks: EngineHooks;
 
   constructor(private opts: EngineOptions) {
     this.store = new ProgressStore(opts.dataDir);
+    this.tiku = new TikuStore(path.join(opts.dataDir, 'tiku.json'));
     this.ctl.onPausedChange = p => {
       if (p) {
         this.setState('paused');
@@ -67,6 +74,11 @@ export class ChaoxingEngine {
       },
       agentEnabled: () => !!opts.getAgentEnabled(),
       vision: () => opts.getVision(),
+      answerPopup: () => !!opts.getAnswerPopup(),
+      visionChannel: () => this.answerChannel(),
+      deepseekKey: () => opts.getDeepseekKey(),
+      tiku: () => this.tiku,
+      submitCoverRate: () => opts.getSubmitCoverRate(),
     };
   }
 
@@ -318,7 +330,8 @@ export class ChaoxingEngine {
                 this.opts.page,
                 this.hooks,
                 this.opts.getDeepseekKey(),
-                this.answerChannel()
+                this.answerChannel(),
+                { tiku: this.tiku, submitCoverRate: this.opts.getSubmitCoverRate() }
               );
               if (qr.success) {
                 this.store.markChapterDone(ensureProgress(), chapter.onclick);
@@ -328,7 +341,7 @@ export class ChaoxingEngine {
               } else {
                 summary.skipped++;
                 result = 'quiz_skip';
-                this.log('warn', '    ⚠ 答题未完成，跳过');
+                this.log('warn', `    ⚠ 答题未完成，跳过（覆盖 ${Math.round(qr.coverage * 100)}%）`);
               }
               await goBackToCourse(this.opts.page, this.hooks);
             } else {
@@ -410,6 +423,8 @@ export class ChaoxingEngine {
     } finally {
       this.running = false;
       this.currentChapter = '';
+      // 任务结束/被强杀前把攒着的答案刷盘，避免最后一轮白攒
+      this.tiku.flush();
     }
     return summary;
   }

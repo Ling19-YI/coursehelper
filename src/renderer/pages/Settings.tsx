@@ -24,6 +24,8 @@ export default function Settings() {
   const [dataDir, setDataDir] = useState('');
   const [speed, setSpeed] = useState<number>(1);
   const [agentOn, setAgentOn] = useState(false);
+  const [coverRate, setCoverRate] = useState<number>(0.8);
+  const [popupOn, setPopupOn] = useState(false);
   const [visionKey, setVisionKey] = useState('');
   const [visionBaseUrl, setVisionBaseUrl] = useState('https://tokendance.space/gateway/v1');
   const [visionModel, setVisionModel] = useState('mimo-v2.6-flash');
@@ -41,6 +43,10 @@ export default function Settings() {
       setVisionBaseUrl(a.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1');
       setVisionModel(a.settings.visionModel || 'mimo-v2.6-flash');
       setAgentOn(!!a.settings.agentEnabled);
+      setCoverRate(
+        a.settings.submitCoverRate === undefined ? 0.8 : Number(a.settings.submitCoverRate)
+      );
+      setPopupOn(!!a.settings.answerPopup);
     }
     if (a.username) setUsername(a.username);
     window.ch.getVision().then(setVisionInfo).catch(() => {});
@@ -72,6 +78,8 @@ export default function Settings() {
         dataDir: dataDir.trim(),
         videoSpeed: speed,
         agentEnabled: agentOn,
+        submitCoverRate: coverRate,
+        answerPopup: popupOn,
         visionBaseUrl: visionBaseUrl.trim(),
         visionModel: visionModel.trim() || 'mimo-v2.6-flash',
       });
@@ -187,6 +195,51 @@ export default function Settings() {
           value={key}
           onChange={e => setKey(e.target.value)}
           autoComplete="off"
+        />
+      </div>
+
+      <div className="cardish">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <b>视频中的随堂题弹窗</b>
+          <Tooltip title="关闭时遇到弹窗会等 StallGuard 判定卡住后在日志提示；开启后自动答题并继续播放。">
+            <Switch
+              checked={popupOn}
+              onChange={setPopupOn}
+              disabled={!visionInfo.configured && !a.settings?.deepseekKey}
+            />
+          </Tooltip>
+        </div>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          默认<strong>关闭</strong>。弹窗出现时视频通常已经暂停，此时自动介入会让「真的卡住」和
+          「该答题了」难以区分，误操作会打断正常播放。需要自动处理时再打开。
+        </div>
+        {popupOn && (
+          <Alert
+            type="warning"
+            showIcon
+            message="已开启随堂弹窗自动答题"
+            description="仅在检测到答题弹窗时介入，处理完立即恢复播放；答不全按下面的覆盖率下限处理，不会硬交。"
+          />
+        )}
+      </div>
+
+      <div className="cardish">
+        <b>交卷覆盖率下限</b>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          自动答题算出的答案低于该比例时<strong>不交卷</strong>，只把已答的部分留在页面上等人工核对。
+          搜不全还硬交，等于把确定的错题一起交上去。
+        </div>
+        <Select
+          value={coverRate}
+          onChange={v => setCoverRate(v)}
+          style={{ width: '100%' }}
+          options={[
+            { value: 0, label: '关闭（搜多少交多少）' },
+            { value: 0.5, label: '50%' },
+            { value: 0.8, label: '80%（推荐）' },
+            { value: 0.9, label: '90%' },
+            { value: 1, label: '100%（必须全有才交）' },
+          ]}
         />
       </div>
 

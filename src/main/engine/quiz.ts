@@ -1,20 +1,10 @@
 ﻿import type { Page, Frame } from 'playwright';
 import type { EngineHooks } from './hooks';
+import type { AnswerChannel, QType, QuizOption, QuizQuestion } from './quizTypes';
+import { CacheSearcher, LlmSearcher, askAI, resolveAnswers, type Searcher } from './searcher';
+import type { TikuStore } from './tiku';
 
-export type QType = 'single' | 'multi' | 'judge' | 'fill' | 'unknown';
-
-export interface QuizOption {
-  label: string;
-  text: string;
-}
-
-export interface QuizQuestion {
-  index: number;
-  stem: string;
-  type: QType;
-  options: QuizOption[];
-  hasInput: boolean;
-}
+export type { QType, QuizOption, QuizQuestion, AnswerChannel } from './quizTypes';
 
 const MARK_ATTR = 'data-qh';
 const FILL_ATTR = 'data-qhf';
@@ -101,6 +91,29 @@ function extractInPage(): { questions: QuizQuestion[] } {
       options.push({ label, text });
     });
 
+    // 页面已透露的答案：已勾选的 input，或带正确答案标记 class 的选项。
+    // 超星在「查看答案/已提交」状态下会把正确项标出来，此时不该再去问 AI。
+    let revealed: string | undefined;
+    for (const inp of inputs) {
+      if (!inp.checked) continue;
+      const host = inp.closest('label') as HTMLElement | null;
+      const m = options.find(o => o.label === (host?.getAttribute('data-qh') || '').split(':')[1]);
+      revealed = (m?.label || 'A') as string;
+      break;
+    }
+    if (!revealed) {
+      for (const o of options) {
+        const host = optionEls[options.indexOf(o)];
+        const cls = String((host?.className || '') + ' ' + Array.from(host?.querySelectorAll('[class]') || [])
+          .map(e => String((e as HTMLElement).className || ''))
+          .join(' '));
+        if (/(?:right|correct|daan|answer[-_]?right|is[-_]?right|success)/i.test(cls)) {
+          revealed = o.label;
+          break;
+        }
+      }
+    }
+
     const fillInputs = Array.from(
       el.querySelectorAll('input[type="text"],input:not([type]),textarea')
     ) as HTMLInputElement[];
@@ -118,6 +131,7 @@ function extractInPage(): { questions: QuizQuestion[] } {
       type,
       options,
       hasInput: fillInputs.length > 0,
+      revealed,
     });
   });
 
@@ -208,107 +222,6 @@ export async function extractQuestions(
   return questions;
 }
 
-function buildPrompt(questions: QuizQuestion[]): string {
-  const lines = questions.map(q => {
-    const type =
-      q.type === 'multi' ? '多选' : q.type === 'judge' ? '判断' : q.type === 'fill' ? '填空' : '单选';
-    const opts = q.options.map(o => `  ${o.label}. ${o.text}`).join('\n');
-    const fill = q.hasInput ? '（有填空输入框）' : '';
-    return `第${q.index}题 [${type}] ${q.stem}${fill}\n${opts}`;
-  });
-  return (
-    '请回答下面' +
-    questions.length +
-    '道超星学习通测验题。\n\n' +
-    lines.join('\n\n') +
-    '\n\n严格只输出JSON数组，不要任何其他文字。格式：' +
-    '[{"i":1,"answer":"A","note":"理由"}]\n' +
-    '规则：单选只给一个字母；多选给多个字母如"AB"；判断题answer用"对"或"错"；填空题answer写要填的内容。' +
-    '完全无法确定时answer写"?"。'
-  );
-}
-
-/** AI 问答通道：优先用多模态配置，没有才回退到 DeepSeek */
-export interface AnswerChannel {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  /** 仅用于日志展示，例如「多模态」或「DeepSeek」 */
-  label: string;
-}
-
-/**
- * 调用 OpenAI 兼容接口做纯文本答题，失败自动重试并清洗 JSON。
- *
- * 注意：这里不硬编码 DeepSeek。用户通常只配置了「多模态 API Key」，
- * 而多模态接口本身就是 OpenAI 兼容的 /chat/completions，
- * 纯文本问答无需图片参数，直接复用即可。
- */
-export async function askAI(
-  ch: AnswerChannel,
-  questions: QuizQuestion[]
-): Promise<Array<{ i: number; answer: string; note?: string }>> {
-  const prompt = buildPrompt(questions);
-  let lastErr = '';
-  for (let attempt = 0; attempt < 3; attempt++) {
-    // 必须有超时：否则接口不响应时会永久挂起，
-    // 测验页的自动答题会卡在原地，只能强杀进程。
-    const LIMIT_MS = 45000;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
-    let resp: Response;
-    try {
-      resp = await fetch(`${ch.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ch.apiKey}` },
-        body: JSON.stringify({
-          model: ch.model,
-          messages: [
-            {
-              role: 'system',
-              content:
-                '你是超星学习通测验答题专家，擅长医学、马克思主义、护理、计算机等课程知识点。只输出JSON数组。',
-            },
-            { role: 'user', content: prompt },
-          ],
-          temperature: attempt === 0 ? 0.1 : 0.3,
-          max_tokens: 2000,
-        }),
-        signal: ctrl.signal,
-      });
-    } catch (e: any) {
-      clearTimeout(timer);
-      lastErr =
-        e?.name === 'AbortError'
-          ? `${ch.label} 超时（${LIMIT_MS / 1000}s）`
-          : `${ch.label} 连接失败: ${String(e?.message || e).slice(0, 60)}`;
-      await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-      continue;
-    }
-    clearTimeout(timer);
-    if (!resp.ok) {
-      lastErr = `${ch.label} 接口 ${resp.status}`;
-      if (resp.status === 401 || resp.status === 402) throw new Error(lastErr);
-      await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
-      continue;
-    }
-    const raw = ((await resp.json()) as any).choices?.[0]?.message?.content || '';
-    const m = raw.match(/\[[\s\S]*\]/);
-    if (!m) {
-      lastErr = 'AI 返回格式错误';
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(m[0].replace(/,\s*]/g, ']'));
-      if (Array.isArray(parsed) && parsed.length) return parsed;
-      lastErr = 'AI 返回空数组';
-    } catch (e: any) {
-      lastErr = 'AI JSON 解析失败: ' + (e?.message || e);
-    }
-  }
-  throw new Error(lastErr);
-}
-
 /** 判断题归一化 */
 function judgeTarget(answer: string): 'right' | 'wrong' | null {
   const a = answer.trim();
@@ -375,7 +288,13 @@ export async function applyAnswers(
             target === 'right' ? /\u6b63\u786e|\u5bf9/.test(o.text) : /\u9519\u8bef|\u9519/.test(o.text)
           );
         }
-        if (pick < 0) pick = target === 'right' ? 0 : 1;
+        // 匹配不到选项文本就放弃：原来的写法是 `pick = target==='right'?0:1`，
+        // 等于用「第一个选项就是对/错」的假设蒙一枪 —— 猜错就是实打实的错题，
+        // 且日志上看不出它只是猜的。这里宁可留空让覆盖率闸门去拦。
+        if (pick < 0) {
+          h.log('info', `      Q${q.index} 判断题选项文本对不上，跳过`);
+          continue;
+        }
       } else if (letters[0]) {
         pick = 'ABCDEFGH'.indexOf(letters[0]);
       }
@@ -461,24 +380,45 @@ export async function submitQuizIn(
   return false;
 }
 
-/** 章节测验答题（章首作业/测验页） */
+export interface QuizOptions {
+  /** 本地题库：命中则不调用 AI */
+  tiku?: TikuStore | null;
+  /**
+   * 交卷前要求的最低答案覆盖率（0~1）。低于则不交卷，只留给人核对。
+   * 0 = 关闭闸门。默认 0.8 与 Tide 同取值。
+   */
+  submitCoverRate?: number;
+}
+
+export const DEFAULT_SUBMIT_COVER_RATE = 0.8;
+
+export interface QuizOutcome {
+  answered: number;
+  success: boolean;
+  /** 实际答案覆盖率 */
+  coverage: number;
+}
+
+/**
+ * 章节测验答题（章首作业/测验页）
+ *
+ * 答案走四级优先级链：
+ *   1. 页面已透露（已勾选 / 正确项 class）→ 不花钱
+ *   2. 本地题库 tiku.json → 不花钱
+ *   3. AI 通道 → 花钱
+ *   4. 都拿不到 → 留空，由覆盖率闸门决定要不要交卷
+ */
 export async function handleQuiz(
   page: Page,
   h: EngineHooks,
   apiKey: string | undefined,
-  ch?: AnswerChannel | null
-): Promise<{ answered: number; success: boolean }> {
-  h.log('info', '    → 检测到答题页面');
-  // 通道优先用调用方传入的；没传就退回旧的 DeepSeek 单 key 形式
-  const channel: AnswerChannel | null = ch
-    ? ch
-    : apiKey
-      ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
-      : null;
-  if (!channel || !channel.apiKey) {
-    h.log('warn', '    ⚠ 未配置 AI 接口（多模态或 DeepSeek 任一即可），跳过答题');
-    return { answered: 0, success: false };
-  }
+  ch?: AnswerChannel | null,
+  opts?: QuizOptions
+): Promise<QuizOutcome> {
+  h.log('info', '    \u2192 \u68c0\u6d4b\u5230\u7b54\u9898\u9875\u9762');
+  const options = opts ?? {};
+  const store = options.tiku ?? null;
+
   const frames = await findQuizFrames(page);
   let questions: QuizQuestion[] = [];
   let frame: Frame | null = null;
@@ -490,36 +430,114 @@ export async function handleQuiz(
     }
   }
   if (!frame || !questions.length) {
-    h.log('warn', '    \u26a0 \u672a\u80fd\u89e3\u6790\u51fa\u9898\u76ee\uff08\u9875\u9762\u7ed3\u6784\u672a\u5339\u914d\uff09');
-    return { answered: 0, success: false };
+    h.log('warn', '    \u26a0 \u672a\u80fd\u89e3\u6790\u51fa\u9898\u76ee');
+    return { answered: 0, success: false, coverage: 0 };
   }
-  h.log('info', `    \u2192 \u89e3\u6790\u51fa ${questions.length} \u9898\uff0c\u8bf7\u6c42 AI`);
-  let answers: Array<{ i: number; answer: string }>;
-  try {
-    answers = await askAI(channel, questions);
-  } catch (e: any) {
-    h.log('error', `    \u2717 AI: ${e.message}`);
-    return { answered: 0, success: false };
+
+  // ─\u2500\u2500 第 1 级：页面自己已经透露的答案 ─────────────────────────
+  const answers = new Map<number, string>();
+  for (const q of questions) {
+    if (q.revealed) answers.set(q.index, q.revealed);
   }
-  h.log('info', `    \u2192 AI \u7ed9\u51fa ${answers.length} \u9898\u7b54\u6848`);
-  const answered = await applyAnswers(page, frame, questions, answers, undefined, h);
-  const success = answered > 0 && (await submitQuizIn(page, frame, undefined, h, '\u5df2\u63d0\u4ea4\u7ae0\u8282\u4f5c\u4e1a'));
+  const pending = questions.filter(q => !answers.has(q.index));
+  h.log(
+    'info',
+    `    \u2192 \u89e3\u6790\u51fa ${questions.length} \u9898` +
+      (answers.size ? `\uff0c\u5176\u4e2d ${answers.size} \u9898\u9875\u9762\u5df2\u7ed9\u51fa\u7b54\u6848` : '')
+  );
+
+  // ─\u2500\u2500 第 2/3 级：本地题库 \u2192 AI ──────────────────────────────────
+  if (pending.length) {
+    const chain: Searcher[] = [];
+    if (store) chain.push(new CacheSearcher(store));
+
+    const channel: AnswerChannel | null = ch
+      ? ch
+      : apiKey
+        ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
+        : null;
+    if (!channel?.apiKey) {
+      h.log('warn', '    \u26a0 \u672a\u914d\u7f6e AI \u63a5\u53e3');
+    } else {
+      chain.push(new LlmSearcher(channel));
+    }
+
+    if (!chain.length) {
+      h.log('warn', '    \u26a0 \u6ca1\u6709\u53ef\u7528\u641c\u9898\u5668\uff0c\u5168\u90e8\u7559\u7a7a');
+    } else {
+      const got = await resolveAnswers(pending, chain, q =>
+        h.log('info', `      Q${q.index} \u65e0\u89e3\uff0c\u7559\u7a7a`)
+      );
+      for (const [k, v] of got) answers.set(k, v);
+    }
+  }
+
+  // ─\u2500\u2500 \u8986\u76d6\u7387\u95f8\u95e8 ─────────────────────────────────────────
+  // \u641c\u4e0d\u5168\u5c31\u4ea4\u5377 = \u628a\u786e\u5b9a\u7684\u9519\u9898\u4e00\u8d77\u4ea4\u4e0a\u53bb\uff0c\u5224\u5206\u6bd4\u7559\u7a7a\u66f4\u7cdf\uff08\u53ef\u80fd\u5931\u53bb\u91cd\u505a\u673a\u4f1a\uff09\u3002
+  const answeredRatio = questions.length ? answers.size / questions.length : 0;
+  const coverRate = options.submitCoverRate ?? DEFAULT_SUBMIT_COVER_RATE;
+  const shouldSubmit = coverRate <= 0 || answeredRatio >= coverRate;
+
+  h.log(
+    'ok',
+    `    \u2192 \u7b54\u6848\u8986\u76d6 ${answers.size}/${questions.length} ` +
+      `(${Math.round(answeredRatio * 100)}%)\uff0c\u95f8\u95e8 ${coverRate <= 0 ? '\u5173\u95ed' : Math.round(coverRate * 100) + '%'}`
+  );
+  if (!shouldSubmit) {
+    h.log(
+      'warn',
+      `    \u26a0 \u8986\u76d6\u7387\u4e0d\u8db3\uff08${Math.round(answeredRatio * 100)}% < ` +
+        `${Math.round(coverRate * 100)}%\uff09\uff0c\u672c\u8f6e\u4e0d\u4ea4\u5377\uff0c\u7b49\u4eba\u5de5\u6838\u5bf9`
+    );
+    return { answered: 0, success: false, coverage: answeredRatio };
+  }
+
+  const payload = [...answers.entries()].map(([i, answer]) => ({ i, answer })).sort((a, b) => a.i - b.i);
+  const answered = await applyAnswers(page, frame, questions, payload, undefined, h);
+
+  // ─\u2500\u2500 \u6c89\u6dc0\uff1a\u53ea\u6709\u771f\u6b63\u70b9\u5230\u9875\u9762\u4e0a\u7684\u7b54\u6848\u624d\u5165\u5e93 ─────────────────────────
+  if (store) {
+    for (const [i, a] of answers) {
+      if (payload.some(p => p.i === i) && a) {
+        store.put(questions.find(q => q.index === i)?.stem ?? '', a);
+      }
+    }
+    store.flush();
+    h.log('info', `    \u00b7 \u672c\u5730\u9898\u5e93\u73b0\u6709 ${store.size()} \u9898`);
+  }
+
+  const success =
+    answered > 0 && (await submitQuizIn(page, frame, undefined, h, '\u5df2\u63d0\u4ea4\u7ae0\u8282\u4f5c\u4e1a'));
   if (!answered) h.log('warn', '    \u26a0 \u4e00\u9898\u672a\u70b9\u5230');
-  return { answered, success };
+  return { answered, success, coverage: answeredRatio };
 }
 
-/** 视频中途随堂弹窗答题：可连续处理多个弹窗 */
+/**
+ * 视频中途随堂弹窗答题：可连续处理多个弹窗。
+ *
+ * 与 handleQuiz 共用同一条答案链和覆盖率闸门 —— 弹窗同样不该「猜」。
+ * 单个弹窗答不全时按选项闸门处理：默认不提交，关掉它让视频继续，
+ * 总比提交一份确定错误的答案强。
+ */
 export async function handleQuizPopup(
   page: Page,
   h: EngineHooks,
-  apiKey: string | undefined
-): Promise<{ answered: number; popups: number }> {
+  apiKey: string | undefined,
+  channel?: AnswerChannel | null,
+  opts?: QuizOptions
+): Promise<{ answered: number; popups: number; submitted: number }> {
+  const options = opts ?? {};
+  const store = options.tiku ?? null;
   let answered = 0;
   let popups = 0;
-  const channel: AnswerChannel | null = apiKey
-    ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
-    : null;
-  if (!channel) return { answered, popups };
+  let submitted = 0;
+
+  const ch: AnswerChannel | null = channel
+    ? channel
+    : apiKey
+      ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
+      : null;
+  if (!ch?.apiKey) return { answered, popups, submitted };
 
   for (let round = 0; round < 6; round++) {
     h.ctl.throwIfStopped();
@@ -532,18 +550,47 @@ export async function handleQuizPopup(
       break;
     }
     popups++;
-    h.log('info', `    \u2192 \u968f\u5802\u7ec3\u4e60\u5f39\u7a97\uff08${questions.length} \u9898\uff09`);
-    try {
-      const answers = await askAI(channel, questions);
-      answered += await applyAnswers(page, popup.frame, questions, answers, popup.selector, h);
-    } catch (e: any) {
-      h.log('error', `    \u2717 AI: ${e.message}`);
+
+    // 同一套优先级：页面已给出 > 本地题库 > AI
+    const answers = new Map<number, string>();
+    for (const q of questions) if (q.revealed) answers.set(q.index, q.revealed);
+    const pending = questions.filter(q => !answers.has(q.index));
+    const chain: Searcher[] = [];
+    if (store) chain.push(new CacheSearcher(store));
+    chain.push(new LlmSearcher(ch));
+    const got = await resolveAnswers(pending, chain);
+    for (const [k, v] of got) answers.set(k, v);
+
+    const ratio = questions.length ? answers.size / questions.length : 0;
+    const gate = options.submitCoverRate ?? DEFAULT_SUBMIT_COVER_RATE;
+    h.log(
+      'info',
+      `    \u2192 \u968f\u5802\u7ec3\u4e60\u5f39\u7a97\uff08${questions.length} \u9898\uff0c\u8986\u76d6 ${Math.round(ratio * 100)}%\uff09`
+    );
+    if (gate > 0 && ratio < gate) {
+      h.log(
+        'warn',
+        `    \u26a0 \u5f39\u7a97\u8986\u76d6\u7387\u4e0d\u8db3\uff08${Math.round(ratio * 100)}% < ${Math.round(gate * 100)}%\uff09\uff0c\u4e0d\u63d0\u4ea4\uff0c\u4ec0\u4e48\u90fd\u4e0d\u70b9`
+      );
       break;
     }
-    const submitted = await submitQuizIn(page, popup.frame, popup.selector, h, '\u5f39\u7a97\u5df2\u63d0\u4ea4');
+
+    try {
+      const payload = [...answers.entries()].map(([i, answer]) => ({ i, answer }));
+      answered += await applyAnswers(page, popup.frame, questions, payload, popup.selector, h);
+      if (store) {
+        for (const [i, a] of answers) store.put(questions.find(q => q.index === i)?.stem ?? '', a);
+      }
+    } catch (e: any) {
+      h.log('error', `    \u2717 \u5f39\u7a97\u7b54\u9898: ${e.message}`);
+      break;
+    }
+
+    const ok = await submitQuizIn(page, popup.frame, popup.selector, h, '\u5f39\u7a97\u5df2\u63d0\u4ea4');
+    if (!ok) break;
+    submitted++;
     await h.ctl.sleep(800);
-    if (!submitted) break;
-    // 关闭后确认弹窗真的消失
+    // 关闭后确认弹窗真的消失，否则会对着同一个弹窗重复提交
     let gone = false;
     for (let k = 0; k < 8; k++) {
       await h.ctl.sleep(500);
@@ -553,9 +600,9 @@ export async function handleQuizPopup(
       }
     }
     if (!gone) break;
-    h.log('ok', '    \u2713 \u5f39\u7a94\u5173\u95ed\uff0c\u7ee7\u7eed\u64ad\u653e\u89c6\u9891');
+    h.log('ok', '    \u2713 \u5f39\u7a97\u5173\u95ed\uff0c\u7ee7\u7eed\u64ad\u653e\u89c6\u9891');
   }
-  return { answered, popups };
+  return { answered, popups, submitted };
 }
 
 /** 兼容旧调用 */

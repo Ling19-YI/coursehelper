@@ -45,6 +45,11 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
         apiKey: store.loadVisionKey() ?? '',
         model: store.settings.visionModel || 'mimo-v2.6-flash',
       }),
+      getSubmitCoverRate: () => {
+        const v = Number(store.settings.submitCoverRate);
+        return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
+      },
+      getAnswerPopup: () => !!store.settings.answerPopup,
     });
     engineDataDir = dataDir;
     return engine;

@@ -1,5 +1,7 @@
 import type { LogLevel } from '../../shared/types';
 import type { TaskControl } from './control';
+import type { AnswerChannel } from './quizTypes';
+import type { TikuStore } from './tiku';
 
 export interface TickInfo {
   ct: number;
@@ -19,4 +21,14 @@ export interface EngineHooks {
   agentEnabled(): boolean;
   /** 多模态视觉服务配置；key 为空则 Agent 不接管 */
   vision(): { baseUrl: string; apiKey: string; model: string };
+  /** 是否自动处理视频播放期间的随堂题弹窗（设置项，默认关） */
+  answerPopup(): boolean;
+  /** 文本搜题通道（多模态优先，其次 DeepSeek），弹窗与章节测验共用 */
+  visionChannel(): AnswerChannel | null;
+  /** 文本搜题 key，仅用于兼容旧的单 key 调用 */
+  deepseekKey(): string;
+  /** 本地题库：命中则不调 AI */
+  tiku(): TikuStore | null;
+  /** 交卷覆盖率闸门（0~1，0=关闭） */
+  submitCoverRate(): number;
 }
