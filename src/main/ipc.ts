@@ -119,7 +119,13 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
   });
   ipcMain.handle('credentials:set', (_ev, username: string, password: string) => {
     if (!username || !password) throw new Error('账号密码不能为空');
+    const prev = store.loadCredentials();
     store.saveCredentials({ username, password });
+    // 换了账号必须清掉浏览器的旧会话，否则登录时平台会直接沿用旧身份，
+    // 表现为「填了新账号，进去还是之前那个账号的课程」。
+    if (prev && prev.username && prev.username !== username) {
+      session.clearAuthCookies().catch(() => {});
+    }
     return true;
   });
   ipcMain.handle('credentials:clear', () => {

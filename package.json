@@ -1,7 +1,7 @@
 {
   "name": "coursehelper",
   "productName": "刷课助手 CourseHelper",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "超星学习通自动刷课助手",
   "main": "app/dist/main/index.js",
   "license": "UNLICENSED",

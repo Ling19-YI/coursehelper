@@ -243,15 +243,102 @@ async function alreadyLoggedIn(page: Page): Promise<boolean> {
   }
 }
 
+/** 11 位手机号。超星的登录名就是手机号，只有它能用于身份比对 */
+function isPhoneLike(s: string): boolean {
+  return /^1[3-9]\d{9}$/.test(s);
+}
+
+/**
+ * 读取当前会话已登录账号的手机号，取不到返回 null。
+ *
+ * 只接受手机号格式：空间页上能读到的往往是昵称（"凌杰"）之类的展示名，
+ * 拿昵称去比对会误判成「换了账号」从而把正常会话踢掉，反而制造新问题。
+ * 读不到就返回 null，让调用方保守地复用现有会话。
+ */
+async function currentSessionAccount(page: Page): Promise<string | null> {
+  const selectors = [
+    '.user-info',
+    '#userInfo',
+    '.mySpace',
+    '[class*="user_name"]',
+    '[class*="username"]',
+    '[class*="user-name"]',
+    '.space_name',
+    '.nickname',
+  ];
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if (!(await loc.isVisible().catch(() => false))) continue;
+      const txt = ((await loc.innerText().catch(() => '')) || '').trim();
+      const m = txt.match(/1[3-9]\d{9}/);
+      if (m) return m[0];
+    } catch {}
+  }
+  return null;
+}
+
+/** 退出当前会话（换账号前必须先登出，否则平台会直接沿用旧身份） */
+async function logout(page: Page, h: EngineHooks): Promise<boolean> {
+  const urls = [
+    'https://passport2.chaoxing.com/logout',
+    'https://i.mooc.chaoxing.com/common/logout',
+  ];
+  for (const u of urls) {
+    try {
+      await page.goto(u, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForTimeout(1200);
+      const cur = page.url();
+      if (cur.includes('passport2') || cur.includes('login')) {
+        h.log('info', '    → 已退出旧账号会话');
+        return true;
+      }
+    } catch {}
+  }
+  // 退不掉就清 Cookie，效果等同
+  try {
+    await page.context().clearCookies();
+    h.log('info', '    → 已清除浏览器 Cookie');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function login(page: Page, h: EngineHooks, username: string, password: string): Promise<boolean> {
   // 关键：若平台会话仍然有效，登录页会直接跳转且不存在 #phone 输入框，
   // 此时继续等表单只会白等 30s 并抛 TimeoutError（表现为「卡在登录中」）。
   h.log('info', '[1/4] 检查登录状态...');
   if (await alreadyLoggedIn(page)) {
-    h.log('ok', '✓ 学习通已处于登录状态，无需重新登录');
-    return true;
+    // 会话有效不代表账号对得上：用户换了账号时平台会直接沿用旧身份，
+    // 表现为「填了新账号，进去还是旧账号的课程」。这里必须核对。
+    const cur = await currentSessionAccount(page);
+    const want = String(username || '').trim();
+    // 只有两边都确认是手机号、且不同，才判定为换了账号。
+    // 任一拿不准就复用会话——误踢正在使用的会话比多登一次要糟得多。
+    const mismatch = isPhoneLike(cur || '') && isPhoneLike(want) && cur !== want;
+
+    if (!mismatch) {
+      h.log('ok', '✓ 学习通已处于登录状态，无需重新登录');
+      return true;
+    }
+
+    h.log('warn', `⚠ 检测到已登录的是其他账号（${cur}），将切换到 ${want}`);
+    await logout(page, h);
+    // 登出后页面可能已跳走，统一重新走一次登录流程
+    return loginWithForm(page, h, username, password);
   }
 
+  return loginWithForm(page, h, username, password);
+}
+
+/** 填写账号密码并提交 */
+async function loginWithForm(
+  page: Page,
+  h: EngineHooks,
+  username: string,
+  password: string
+): Promise<boolean> {
   h.log('info', '[1/4] 登录中...');
   try {
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });

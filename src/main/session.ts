@@ -90,6 +90,40 @@ export class Session {
     return page;
   }
 
+  /**
+   * 仅清除超星相关 Cookie，不关窗口、不动页面。
+   * 换账号时调用：否则平台会沿用旧身份，表现为「填了新账号还是旧账号的课」。
+   */
+  async clearAuthCookies(): Promise<void> {
+    const domains = [
+      'https://chaoxing.com',
+      'https://www.chaoxing.com',
+      'https://mooc1.chaoxing.com',
+      'https://mooc1-1.chaoxing.com',
+      'https://mooc1-2.chaoxing.com',
+      'https://mooc1-3.chaoxing.com',
+      'https://mooc2-ans.chaoxing.com',
+      'https://i.mooc.chaoxing.com',
+      'https://passport2.chaoxing.com',
+    ];
+    try {
+      const page = await this.ensurePage();
+      await page.context().clearCookies();
+      return;
+    } catch {}
+    // 内嵌模式拿不到 Page 时，直接对 Electron 会话下手
+    try {
+      const ses = this.view?.webContents?.session;
+      if (!ses) return;
+      for (const d of domains) {
+        await ses.clearStorageData({ origin: d, storages: ['cookies'] }).catch(() => {});
+      }
+      await ses.clearStorageData({ storages: ['cookies'] }).catch(() => {});
+    } catch (e) {
+      console.warn('[session] 清除登录 Cookie 失败:', e);
+    }
+  }
+
   async ensurePage(): Promise<Page> {
     if (this.page) {
       try {
