@@ -16,6 +16,11 @@ const SUBMIT_WORDS = /提交|确定|确认|交卷|完成/;
 const POPUP_SELECTORS = [
   '#divVideoQuestion',
   '#divExamWork',
+  // 实测页面上存在这三个超星弹窗容器，原先一个都没覆盖，导致随堂弹窗永远发现不了
+  '#workpop',
+  '#hintPop',
+  '.popDiv.wid440',
+  '.popDiv.wid840',
   '.layui-layer',
   '.layui-dialog',
   '[role="dialog"]',
@@ -28,89 +33,194 @@ const POPUP_SELECTORS = [
 
 const TEXT_CLEAN = (s: string) => (s || '').replace(/\u00a0/g, ' ').replace(/[\t\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
+/**
+ * 超星的题目容器。
+ *
+ * 抓包实测（mooc-ans/work/selectWorkQuestionYiPiYue）：
+ *   <div id="question210712502" class="TiMu newTiMu ans-cc singleQuesId">
+ *     <div class="Zy_TItle">1 【单选题】 ...</div>
+ *     <span class="newZy_TItle">【单选题】</span>
+ *     <div class="answerScore">10.0分</div>
+ *   </div>
+ *
+ * ⚠️ 下面的 extractInPage 通过 `fn.toString()` 注入页面执行，页面里没有模块
+ * 作用域。所以它用到的一切常量都必须定义在函数体内部 —— 提到模块级会直接
+ * ReferenceError。这一点是实际踩过坑的，不要「顺手」把常量提出去。
+ */
 /** 在页面内提取题目结构，并给可点击项打 data-qh 标记 */
 function extractInPage(): { questions: QuizQuestion[] } {
-  const clean = (s: string) => (s || '').replace(/\u00a0/g, ' ').replace(/[\t\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
-  const isQStem = (t: string) =>
-    /^\(?\d{1,3}\s*[\.\u3001\uff0e,)）:\uff1a]/.test(t) || /^\s*[\uff08(]?\d{1,3}[\uff09)]\s*/.test(t);
+  // ⚠️ 以下常量必须留在函数体内：本函数会被 toString() 后注入页面执行
+  const QUESTION_SELECTORS = [
+    '.TiMu.newTiMu',
+    '.TiMu',
+    '.Zi_mu',
+    '.newTiMu',
+    '[id^="question"]',
+    '.TiMuList li',
+    '.mark_letter',
+    '.ZYAnswer .clearfix',
+  ];
+  /** 选项行：`A、xxx` / `B.xxx` / `C)` 等超星与通用写法 */
+  const OPTION_LINE = /^\s*([A-Ha-h])\s*[\.\u3001\uff0e,)）:\uff1a]\s*(\S[^\n]{0,200}?)\s*$/;
+  /**
+   * 跨行扫描选项。
+   *
+   * 超星有两种渲染：
+   *   可作答态  <li class="before-after" role="radio">A attainable</li>
+   *   回看态    纯文本，且四个选项可能挤在同一行（"A attainable B endurable ..."）
+   * 后者按行切分完全失效，必须全局扫描，靠「下一个字母标记」断边界。
+   */
+  const scanOptions = (text: string) => {
+    const out: Array<{ label: string; text: string }> = [];
+    const re =
+      /(?:^|[\s\u3000])([A-Ha-h])\s*[\.\u3001\uff0e,)）:\uff1a]\s*([^\s\u3000][^]*?)(?=(?:[\s\u3000][A-Ha-h]\s*[\.\u3001\uff0e,)）:\uff1a])|$)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        // 回看态每个选项后面跟着「我的答案：X」，别把它算进选项正文
+        const t = (m[2] || '').split(/\s*我的答案\s*[:：]?/)[0].trim().slice(0, 200);
+        out.push({ label: m[1].toUpperCase(), text: t });
+      if (out.length >= 8) break;
+    }
+    return out;
+  };
+  const TYPE_BADGE = /[\uff08(]?\s*(单选|多选|判断|填空|问答|简答|论述|选择)[\uff09)]?\s*题?/;
 
-  const nodes = Array.from(document.querySelectorAll('div,li,td,section,p,dd,article,form')) as HTMLElement[];
-  const cand: HTMLElement[] = [];
-  for (const el of nodes) {
-    const t = clean(el.innerText || el.textContent || '');
-    if (t.length < 4 || t.length > 1200) continue;
-    if (!isQStem(t) && !/[\u5355\u591a\u5224]?\u9009[\u9898]|\u586b\u7a7a|\u4e0b\u62c9\u9898|\u5224\u65ad/.test(t)) continue;
-    const hasChoice = el.querySelector('input[type="radio"],input[type="checkbox"],label,[aria-label]');
-    if (!hasChoice && !el.querySelector('input[type="text"],textarea')) continue;
-    cand.push(el);
+  const clean = (s: string) => (s || '').replace(/\u00a0/g, ' ').replace(/[\t\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  // 备选行数：>=2 行才认为是选择题。超星的回看态没有 input/label，
+  // 只靠「有没有可点元素」判断会把整份卷子漏掉。
+  const countOptionLines = (t: string) => {
+    let n = 0;
+    for (const line of (t || '').split(/[\n\r]+/)) {
+      if (OPTION_LINE.test(line.trim())) n++;
+    }
+    return n;
+  };
+
+  // ── 收集候选：先显式选择器，再全文启发式 ──────────────────────────
+  const picked: HTMLElement[] = [];
+  const seen = new Set<HTMLElement>();
+  for (const sel of QUESTION_SELECTORS) {
+    let els: HTMLElement[] = [];
+    try {
+      els = Array.from(document.querySelectorAll(sel)) as HTMLElement[];
+    } catch {
+      continue;
+    }
+    for (const el of els) {
+      const t = clean(el.innerText || el.textContent || '');
+      if (t.length < 4 || t.length > 1200) continue;
+      if (seen.has(el)) continue;
+      seen.add(el);
+      picked.push(el);
+    }
   }
-  const inner = cand.filter(el => !cand.some(o => o !== el && el.contains(o)));
-  const picked = inner.length ? inner : cand.slice(0, 30);
+
+  if (!picked.length) {
+    // 启发式兜底：题干以序号开头，或文本里出现题型关键词，且能判定为选择/填空
+    const isQStem = (t: string) =>
+      /^\s*[\uff08(]?\s*\d{1,3}\s*[\.\u3001\uff0e,)）:\uff1a\u3011\uFF3D\s*]/.test(t) ||
+      /^\s*\d{1,3}\s+[\u3010\[\uff08(]/.test(t) ||      // "1 【单选题】"
+      TYPE_BADGE.test(t);
+    const nodes = Array.from(document.querySelectorAll('div,li,td,section,p,dd,article,form')) as HTMLElement[];
+    const cand: HTMLElement[] = [];
+    for (const el of nodes) {
+      const t = clean(el.innerText || el.textContent || '');
+      if (t.length < 4 || t.length > 1200) continue;
+      if (!isQStem(t)) continue;
+      const hasChoice =
+        el.querySelector('input[type="radio"],input[type="checkbox"],label,[aria-label],[role=radio],[role=checkbox]') ||
+        el.querySelector('input[type="text"],input:not([type]),textarea') ||
+        countOptionLines(el.innerText || el.textContent || '') >= 2;
+      if (!hasChoice) continue;
+      cand.push(el);
+    }
+    const inner = cand.filter(el => !cand.some(o => o !== el && el.contains(o)));
+    picked.push(...(inner.length ? inner : cand.slice(0, 30)));
+  }
 
   const questions: QuizQuestion[] = [];
   picked.slice(0, 60).forEach((el, qi) => {
-    const full = clean(el.innerText || el.textContent || '');
+    const raw = el.innerText || el.textContent || '';
+    const full = clean(raw);
+    const rawLines = raw.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
+
+    // ── 题型：优先取角标，其次题干里的关键词 ───────────────────────
     let type: QType = 'unknown';
-    if (/\u591a\u9009|\u591a\u9879/.test(full)) type = 'multi';
-    else if (/\u5224\u65ad/.test(full)) type = 'judge';
-    else if (/\u586b\u7a7a|\u8f93\u5165|\u7b54\u6848\u586b\u5199|\u4e0b\u62c9/.test(full)) type = 'fill';
-    else if (/\u5355\u9009|\u5355\u9879/.test(full)) type = 'single';
+    const badgeEl = el.querySelector('.newZy_TItle, .Zy_TItle, .tiMuTitle');
+    const badge = clean(badgeEl?.textContent || '') || full.slice(0, 40);
+    if (/多选|多项/.test(badge)) type = 'multi';
+    else if (/判断/.test(badge)) type = 'judge';
+    else if (/填空|输入|下拉/.test(badge)) type = 'fill';
+    else if (/单选|单项/.test(badge)) type = 'single';
+    else if (/问答|简答|论述/.test(badge)) type = 'fill';
+    else if (/多选|多项/.test(full)) type = 'multi';
+    else if (/判断/.test(full)) type = 'judge';
+    else if (/填空|输入|答案填写|下拉/.test(full)) type = 'fill';
+    else if (/单选|多项/.test(full)) type = 'single';
     else if (el.querySelector('input[type="checkbox"]')) type = 'multi';
     else if (el.querySelector('input[type="radio"]')) type = 'single';
 
+    // ── 选项 ────────────────────────────────────────────────────────
+    // 实测（doHomeWorkNew）：选项是 <li class="before-after" role="radio">，
+    // 文本自带字母前缀（"A attainable"），既没有 input[type=radio] 也没有 aria-checked；
+    // 同级的 <label class="fl"> 只有字母，不能当选项。
     const optionEls: HTMLElement[] = [];
     const inputs = Array.from(
       el.querySelectorAll('input[type="radio"],input[type="checkbox"]')
     ) as HTMLInputElement[];
     for (const inp of inputs) {
       const host = inp.closest('label') as HTMLElement | null;
-      if (!host) continue;
-      if (!optionEls.includes(host)) optionEls.push(host);
+      if (host && !optionEls.includes(host)) optionEls.push(host);
       if (inp.id) {
         const lbl = el.querySelector('label[for="' + inp.id + '"]') as HTMLElement | null;
         if (lbl && !optionEls.includes(lbl)) optionEls.unshift(lbl);
       }
     }
     if (optionEls.length < 2) {
-      const lettered = Array.from(el.querySelectorAll('li,label,div,span,p,td')) as HTMLElement[];
-      for (const c of lettered) {
-        const t = clean(c.innerText || c.textContent || '');
-        if (t.length > 0 && t.length <= 300 && /^[A-Ha-h]\s*[\.\u3001\uff0e,)）:\uff1a]/.test(t)) {
-          if (!optionEls.includes(c)) optionEls.push(c);
-        }
+      const roleOpts = Array.from(
+        el.querySelectorAll('li[role="radio"],li[role="checkbox"],[role="radio"],[role="checkbox"],li.before-after')
+      ) as HTMLElement[];
+      // 过滤掉只含单个字母的徽标（超星的 <label class="fl before">A</label>）
+      for (const o of roleOpts) {
+        const t = clean(o.textContent || '');
+        if (t.length <= 2 && !/\b[A-H]\b/.test(t)) continue;
+        if (!optionEls.includes(o)) optionEls.push(o);
+      }
+    }
+    // 文字版选项：元素一个都没有时，从纯文本里扫
+    const textOptions = optionEls.length >= 2 ? null : scanOptions(raw);
+    if (optionEls.length < 2) {
+      // 回看态没有 label/li，选项就是纯文本行 `A、xxx`
+      for (const line of rawLines) {
+        const m = line.match(OPTION_LINE);
+        if (!m) continue;
+        const node = Array.from(el.querySelectorAll('li,label,div,span,p,td')).find(
+          c => clean(c.textContent || '') === clean(line)
+        ) as HTMLElement | undefined;
+        const host = node || el;
+        if (!optionEls.includes(host)) optionEls.push(host);
       }
     }
 
     const options: QuizOption[] = [];
-    optionEls.slice(0, 8).forEach((oe, oi) => {
-      const label = String.fromCharCode(65 + oi);
-      oe.setAttribute('data-qh', qi + ':' + label);
-      const text = clean(oe.innerText || oe.textContent || '')
-        .replace(new RegExp('^' + label + '\\s*[\\.\\u3001\\uff0e,)）:\\uff1a]?\\s*'), '')
-        .slice(0, 200);
-      options.push({ label, text });
-    });
-
-    // 页面已透露的答案：已勾选的 input，或带正确答案标记 class 的选项。
-    // 超星在「查看答案/已提交」状态下会把正确项标出来，此时不该再去问 AI。
-    let revealed: string | undefined;
-    for (const inp of inputs) {
-      if (!inp.checked) continue;
-      const host = inp.closest('label') as HTMLElement | null;
-      const m = options.find(o => o.label === (host?.getAttribute('data-qh') || '').split(':')[1]);
-      revealed = (m?.label || 'A') as string;
-      break;
-    }
-    if (!revealed) {
-      for (const o of options) {
-        const host = optionEls[options.indexOf(o)];
-        const cls = String((host?.className || '') + ' ' + Array.from(host?.querySelectorAll('[class]') || [])
-          .map(e => String((e as HTMLElement).className || ''))
-          .join(' '));
-        if (/(?:right|correct|daan|answer[-_]?right|is[-_]?right|success)/i.test(cls)) {
-          revealed = o.label;
-          break;
-        }
+    const optionTexts: string[] = [];
+    if (optionEls.length >= 2) {
+      optionEls.slice(0, 8).forEach((oe, oi) => {
+        const label = String.fromCharCode(65 + oi);
+        oe.setAttribute('data-qh', qi + ':' + label);
+        const text = clean(oe.innerText || oe.textContent || '')
+          .replace(new RegExp('^' + label + '\\s*[\\.\\u3001\\uff0e,)）:\\uff1a]?\\s*'), '')
+          .slice(0, 200);
+        options.push({ label, text });
+        optionTexts.push(text);
+      });
+    } else if (textOptions && textOptions.length >= 2) {
+      // 文字版：只有文本、没有元素可点。回看态本来也不作答，能解析出来主要是
+      // 为了让 AI 搜题与题库沉淀可用；applyAnswers 因缺 data-qh 会点不到，
+      // 日志里体现为「一题未点到」，不会误判成已答。
+      for (const o of textOptions) {
+        options.push({ label: o.label, text: o.text });
+        optionTexts.push(o.text);
       }
     }
 
@@ -119,11 +229,65 @@ function extractInPage(): { questions: QuizQuestion[] } {
     ) as HTMLInputElement[];
     fillInputs.forEach((inp, fi) => inp.setAttribute('data-qhf', String(qi) + ':' + fi));
 
-    let stem = full;
-    for (const o of options) {
-      if (o.text && stem.includes(o.text)) stem = stem.replace(o.text, ' ');
+    // ── 题干 ────────────────────────────────────────────────────────
+    // 实测 .Zy_TItle 里混着三样东西：题号 <i class="fl">1</i>、题型角标
+    // <span class="newZy_TItle">【单选题】</span>、以及真正的题干。直接取
+    // textContent 会得到「单选题】Part I: ...」这种带残缺括号的开头，
+    // 污染题干也污染题库归一化，所以先克隆再剔除。
+    let stem = '';
+    const titleEl = el.querySelector('.Zy_TItle, .tiMuTitle, .mark_letter');
+    if (titleEl) {
+      const clone = titleEl.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('i.fl, .newZy_TItle, .answerScore, .newAnswerScore').forEach(n => n.remove());
+      stem = clean(clone.textContent || '');
     }
-    stem = clean(stem).slice(0, 400);
+    if (!stem) {
+      stem = rawLines.filter(l => !OPTION_LINE.test(l) && !/^\s*(我的答案|得分|分值)/.test(l)).join(' ');
+    }
+    if (stem === full) {
+      for (const t of optionTexts) if (t && stem.includes(t)) stem = stem.replace(t, ' ');
+    }
+    stem = clean(stem).replace(/^\s*\d{1,3}\s*[\.\u3001\uff0e,)）:\uff1a\u3010\[\s]*/, '').slice(0, 400);
+
+    // ── 页面已透露的答案 ───────────────────────────────────────────
+    // 仅取「已勾选」和「正确项 class」两种硬标记。
+    // 回看态的「我的答案：X」是学生当初选的，不是正确答案，不能当答案用。
+    let revealed: string | undefined;
+    for (const inp of inputs) {
+      if (!inp.checked) continue;
+      const host = inp.closest('label') as HTMLElement | null;
+      const m = options.find(o => o.label === (host?.getAttribute('data-qh') || '').split(':')[1]);
+      revealed = m?.label || 'A';
+      break;
+    }
+    if (!revealed) {
+      for (const o of options) {
+        const host = optionEls[options.indexOf(o)];
+        const cls = [host?.className || '', ...Array.from(host?.querySelectorAll('[class]') || []).map(e => String((e as HTMLElement).className || ''))].join(' ');
+        // aria-checked 是标准做法；超星实测没给，退而看选中态 class
+        if (host?.getAttribute('aria-checked') === 'true') {
+          revealed = o.label;
+          break;
+        }
+        if (/\b(checked|selected|active|on)\b/i.test(cls)) {
+          revealed = o.label;
+          break;
+        }
+      }
+    }
+    if (!revealed) {
+      // 只认明确的「正确答案」标记，不把学生自己选的那项当答案 ——
+      // 回看态里「我的答案：X」是当初选的，不是对的。
+      const rightRe = /(?:right|correct|daan|ansRight|isRight|success)/i;
+      for (const o of options) {
+        const host = optionEls[options.indexOf(o)];
+        const cls = [host?.className || '', ...Array.from(host?.querySelectorAll('[class]') || []).map(e => String((e as HTMLElement).className || ''))].join(' ');
+        if (rightRe.test(cls)) {
+          revealed = o.label;
+          break;
+        }
+      }
+    }
 
     questions.push({
       index: qi + 1,
@@ -139,9 +303,21 @@ function extractInPage(): { questions: QuizQuestion[] } {
 }
 
 /** 找到含题目的 frame（含主页面） */
+/**
+ * 超星的测验/作业 frame。
+ *
+ * 实测这两个 URL 比「正文里出现『单选题』」可靠得多 —— 后者在看完的课程里
+ * 整页正文都有这个词，会把非测验 frame 也拖进来。
+ */
+const QUIZ_FRAME_URL = /selectWorkQuestion|work\/work|VideoQuestion|ExamWork|\/(work|exam)\/(start|answer|question)/i;
+
 export async function findQuizFrames(page: Page): Promise<Frame[]> {
   const out: Frame[] = [];
   for (const frame of page.frames()) {
+    if (QUIZ_FRAME_URL.test(frame.url())) {
+      out.push(frame);
+      continue;
+    }
     try {
       const hit = await frame.evaluate((words: string) => {
         const re = new RegExp(words);
