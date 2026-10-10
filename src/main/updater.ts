@@ -2,25 +2,16 @@ import { app, type BrowserWindow } from 'electron';
 import { autoUpdater } from 'electron-updater';
 
 export interface UpdateInfo {
-  /** 当前是否在检查中 */
   checking: boolean;
-  /** 是否有新版本 */
   available: boolean;
-  /** 最新版本号 */
   version?: string;
-  /** 新版本更新说明 */
   notes?: string;
-  /** 发布时间 */
   releaseDate?: string;
-  /** 下载进度 0-100 */
   percent: number;
-  /** 下载速度（字节/秒） */
   speed: number;
   transferred: number;
   total: number;
-  /** 是否正在下载 */
   downloading: boolean;
-  /** 上次检查结果文案 */
   message: string;
 }
 
@@ -37,8 +28,76 @@ export interface UpdatePayload {
  */
 const isDev = !app.isPackaged;
 
+/**
+ * 更新源列表，按顺序尝试，失败自动回退到下一个。
+ *
+ * 为什么需要多源：国内大量用户无法访问 GitHub，
+ * 只挂 GitHub 的话他们装完就再也收不到更新。
+ *
+ * GitCode 侧有两个坑，都实测踩过：
+ *   1) 不能用 releases/latest/download/latest.yml 这种「跟随最新版本」的写法，
+ *      该地址返回的是 HTML 登录页而非 yml；
+ *   2) 正确结构是 releases/download/<tag>/，若写成 releases/<tag>/download/
+ *      会返回一个 3.5KB 的 HTML 错误页（而不是报 404，极易误判为下载成功）。
+ * 因此每次检查前先调 API 取回当前最新 tag，再拼出真实地址。
+ */
+const SOURCES: Array<{
+  name: string;
+  /** 应用内展示用，不含任何凭据 */
+  build(timeoutMs: number): Promise<Record<string, unknown> | null>;
+  timeoutMs: number;
+}> = [
+  {
+    name: 'GitHub',
+    timeoutMs: 12000,
+    build: async () => ({
+      provider: 'github',
+      owner: 'Ling19-YI',
+      repo: 'coursehelper',
+      releaseType: 'release',
+    }),
+  },
+  {
+    name: 'GitCode',
+    timeoutMs: 15000,
+    build: async timeoutMs => {
+      const tag = await resolveGitCodeLatestTag(timeoutMs);
+      if (!tag) return null;
+      return {
+        provider: 'generic',
+        url: `https://gitcode.com/2603_95808828/coursehelp/releases/download/${tag}`,
+      };
+    },
+  },
+];
+
+/** 通过 GitCode API 取最新发行版 tag；该接口公开可读，无需令牌 */
+async function resolveGitCodeLatestTag(timeoutMs: number): Promise<string | null> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(
+        'https://gitcode.com/api/v5/repos/2603_95808828/coursehelp/releases/latest',
+        { signal: ctrl.signal, headers: { 'User-Agent': 'coursehelper' } }
+      );
+      if (!r.ok) return null;
+      const j: any = await r.json();
+      return typeof j?.tag_name === 'string' && j.tag_name ? j.tag_name : null;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return null;
+  }
+}
+
 let win: BrowserWindow | null = null;
 let checking = false;
+/** 正在按顺序试多个源：此时单个源失败不该立刻报错，等所有源试完再说 */
+let probing = false;
+/** 当前生效的源名，用于把提示文案说清楚 */
+let activeSource = '';
 
 const state: UpdateInfo = {
   checking: false,
@@ -83,13 +142,14 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
 
   autoUpdater.on('update-available', (info: any) => {
     checking = false;
+    const via = activeSource ? `（${activeSource}）` : '';
     merge({
       checking: false,
       available: true,
       version: info?.version,
       notes: String(info?.releaseNotes || '').slice(0, 2000),
       releaseDate: info?.releaseDate,
-      message: `发现新版本 v${info?.version}`,
+      message: `发现新版本 v${info?.version}${via}`,
     });
   });
 
@@ -124,6 +184,8 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
   });
 
   autoUpdater.on('error', (e: any) => {
+    // 多源探测过程中的单个源失败由外层处理，这里不抢先报错
+    if (probing) return;
     checking = false;
     const msg = String(e?.message || e || '未知错误');
     merge({ checking: false, downloading: false, message: `检查更新失败：${msg.slice(0, 120)}` });
@@ -131,14 +193,74 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
   });
 }
 
-/** 手动检查更新 */
+/** 用指定源尝试一次检查，返回是否成功（含「已是最新」也算成功） */
+function probeOnce(cfg: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>(resolve => {
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      autoUpdater.removeListener('update-available', onOk);
+      autoUpdater.removeListener('update-not-available', onOk);
+      autoUpdater.removeListener('error', onFail);
+      resolve(ok);
+    };
+    const onOk = () => done(true);
+    const onFail = () => done(false);
+
+    const timer = setTimeout(() => done(false), timeoutMs);
+
+    autoUpdater.on('update-available', onOk);
+    autoUpdater.on('update-not-available', onOk);
+    autoUpdater.on('error', onFail);
+
+    try {
+      autoUpdater.setFeedURL(cfg as any);
+      autoUpdater.checkForUpdates().catch(() => onFail());
+    } catch {
+      onFail();
+    }
+  });
+}
+
+/** 手动检查更新：按顺序尝试所有源 */
 export async function checkForUpdates(): Promise<void> {
   if (isDev || checking) return;
+  checking = true;
+  probing = true;
+  merge({ checking: true, available: false, message: '正在检查更新…' });
+
+  const failures: string[] = [];
+
   try {
-    await autoUpdater.checkForUpdates();
-  } catch (e: any) {
+    for (const src of SOURCES) {
+      let cfg: Record<string, unknown> | null = null;
+      try {
+        cfg = await src.build(src.timeoutMs);
+      } catch {
+        cfg = null;
+      }
+      if (!cfg) {
+        failures.push(`${src.name}: 无法定位更新地址`);
+        continue;
+      }
+
+      activeSource = src.name;
+      const ok = await probeOnce(cfg, src.timeoutMs);
+      if (ok) return; // update-available / update-not-available 已触发并更新了 UI
+      failures.push(`${src.name}: 不可达`);
+    }
+
+    merge({
+      checking: false,
+      available: false,
+      message: `检查更新失败：${failures.join('；').slice(0, 160)}`,
+    });
+    send({ error: failures.join('; ').slice(0, 200) });
+  } finally {
+    probing = false;
     checking = false;
-    merge({ message: `检查更新失败：${String(e?.message || e).slice(0, 100)}` });
   }
 }
 
