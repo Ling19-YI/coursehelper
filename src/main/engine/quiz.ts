@@ -1,4 +1,4 @@
-import type { Page, Frame } from 'playwright';
+﻿import type { Page, Frame } from 'playwright';
 import type { EngineHooks } from './hooks';
 
 export type QType = 'single' | 'multi' | 'judge' | 'fill' | 'unknown';
@@ -228,26 +228,41 @@ function buildPrompt(questions: QuizQuestion[]): string {
   );
 }
 
-/** 调用 DeepSeek，失败自动重试并清洗 JSON */
-export async function askDeepSeek(
-  apiKey: string,
+/** AI 问答通道：优先用多模态配置，没有才回退到 DeepSeek */
+export interface AnswerChannel {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  /** 仅用于日志展示，例如「多模态」或「DeepSeek」 */
+  label: string;
+}
+
+/**
+ * 调用 OpenAI 兼容接口做纯文本答题，失败自动重试并清洗 JSON。
+ *
+ * 注意：这里不硬编码 DeepSeek。用户通常只配置了「多模态 API Key」，
+ * 而多模态接口本身就是 OpenAI 兼容的 /chat/completions，
+ * 纯文本问答无需图片参数，直接复用即可。
+ */
+export async function askAI(
+  ch: AnswerChannel,
   questions: QuizQuestion[]
 ): Promise<Array<{ i: number; answer: string; note?: string }>> {
   const prompt = buildPrompt(questions);
   let lastErr = '';
   for (let attempt = 0; attempt < 3; attempt++) {
-    // 同样必须有超时：否则 DeepSeek 不响应时会永久挂起，
+    // 必须有超时：否则接口不响应时会永久挂起，
     // 测验页的自动答题会卡在原地，只能强杀进程。
     const LIMIT_MS = 45000;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
     let resp: Response;
     try {
-      resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      resp = await fetch(`${ch.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ch.apiKey}` },
         body: JSON.stringify({
-          model: 'deepseek-chat',
+          model: ch.model,
           messages: [
             {
               role: 'system',
@@ -265,14 +280,14 @@ export async function askDeepSeek(
       clearTimeout(timer);
       lastErr =
         e?.name === 'AbortError'
-          ? `DeepSeek 超时（${LIMIT_MS / 1000}s）`
-          : `DeepSeek 连接失败: ${String(e?.message || e).slice(0, 60)}`;
+          ? `${ch.label} 超时（${LIMIT_MS / 1000}s）`
+          : `${ch.label} 连接失败: ${String(e?.message || e).slice(0, 60)}`;
       await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
       continue;
     }
     clearTimeout(timer);
     if (!resp.ok) {
-      lastErr = `DeepSeek API ${resp.status}`;
+      lastErr = `${ch.label} 接口 ${resp.status}`;
       if (resp.status === 401 || resp.status === 402) throw new Error(lastErr);
       await new Promise(r => setTimeout(r, 800 * (attempt + 1)));
       continue;
@@ -450,11 +465,18 @@ export async function submitQuizIn(
 export async function handleQuiz(
   page: Page,
   h: EngineHooks,
-  apiKey: string | undefined
+  apiKey: string | undefined,
+  ch?: AnswerChannel | null
 ): Promise<{ answered: number; success: boolean }> {
-  h.log('info', '    \u2192 \u68c0\u6d4b\u5230\u7b54\u9898\u9875\u9762');
-  if (!apiKey) {
-    h.log('warn', '    \u26a0 \u672a\u914d\u7f6e DeepSeek API Key\uff0c\u8df3\u8fc7\u7b54\u9898');
+  h.log('info', '    → 检测到答题页面');
+  // 通道优先用调用方传入的；没传就退回旧的 DeepSeek 单 key 形式
+  const channel: AnswerChannel | null = ch
+    ? ch
+    : apiKey
+      ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
+      : null;
+  if (!channel || !channel.apiKey) {
+    h.log('warn', '    ⚠ 未配置 AI 接口（多模态或 DeepSeek 任一即可），跳过答题');
     return { answered: 0, success: false };
   }
   const frames = await findQuizFrames(page);
@@ -474,7 +496,7 @@ export async function handleQuiz(
   h.log('info', `    \u2192 \u89e3\u6790\u51fa ${questions.length} \u9898\uff0c\u8bf7\u6c42 AI`);
   let answers: Array<{ i: number; answer: string }>;
   try {
-    answers = await askDeepSeek(apiKey, questions);
+    answers = await askAI(channel, questions);
   } catch (e: any) {
     h.log('error', `    \u2717 AI: ${e.message}`);
     return { answered: 0, success: false };
@@ -494,7 +516,10 @@ export async function handleQuizPopup(
 ): Promise<{ answered: number; popups: number }> {
   let answered = 0;
   let popups = 0;
-  if (!apiKey) return { answered, popups };
+  const channel: AnswerChannel | null = apiKey
+    ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
+    : null;
+  if (!channel) return { answered, popups };
 
   for (let round = 0; round < 6; round++) {
     h.ctl.throwIfStopped();
@@ -509,7 +534,7 @@ export async function handleQuizPopup(
     popups++;
     h.log('info', `    \u2192 \u968f\u5802\u7ec3\u4e60\u5f39\u7a97\uff08${questions.length} \u9898\uff09`);
     try {
-      const answers = await askDeepSeek(apiKey, questions);
+      const answers = await askAI(channel, questions);
       answered += await applyAnswers(page, popup.frame, questions, answers, popup.selector, h);
     } catch (e: any) {
       h.log('error', `    \u2717 AI: ${e.message}`);

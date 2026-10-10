@@ -180,7 +180,7 @@ export default function Settings() {
       <div className="cardish">
         <b>DeepSeek API Key（选填）</b>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          仅用于纯文本场景的章节测验；AI 自动答题走上方多模态通道。
+          备用通道，仅在上方多模态 Key 为空时才使用。填了多模态就不用填这里。
         </div>
         <Input.Password
           placeholder="sk-..."

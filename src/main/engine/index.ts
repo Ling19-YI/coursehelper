@@ -15,7 +15,7 @@ import { ProgressStore } from './progress';
 import { diagVideo, setMediaPlayback } from './keepalive';
 import { login, getCourses, openCourseChapters, clickChapter, goBackToCourse, getChapters } from './chaoxing';
 import { handleDocument } from './document';
-import { isQuizPage, handleQuiz } from './quiz';
+import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
 import { waitForVideo, waitForVideoEnd } from './video';
 import type { ChapterResult } from '../../shared/types';
 import type { EngineHooks } from './hooks';
@@ -68,6 +68,31 @@ export class ChaoxingEngine {
       agentEnabled: () => !!opts.getAgentEnabled(),
       vision: () => opts.getVision(),
     };
+  }
+
+  /**
+   * 章节测验用的 AI 通道。
+   *
+   * 优先用多模态配置：用户通常只填了「多模态 API Key」，
+   * 而多模态接口本身就是 OpenAI 兼容的 /chat/completions，
+   * 纯文本答题无需图片参数，可以直接复用。
+   * 只有在没配多模态时才回退到单独的 DeepSeek Key。
+   */
+  private answerChannel(): AnswerChannel | null {
+    const v = this.opts.getVision();
+    if (v?.apiKey) {
+      return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model, label: '多模态' };
+    }
+    const dk = this.opts.getDeepseekKey();
+    if (dk) {
+      return {
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: dk,
+        model: 'deepseek-chat',
+        label: 'DeepSeek',
+      };
+    }
+    return null;
   }
 
   get currentState() {
@@ -289,7 +314,12 @@ export class ChaoxingEngine {
 
             const isQuiz = await isQuizPage(this.opts.page);
             if (isQuiz) {
-              const qr = await handleQuiz(this.opts.page, this.hooks, this.opts.getDeepseekKey());
+              const qr = await handleQuiz(
+                this.opts.page,
+                this.hooks,
+                this.opts.getDeepseekKey(),
+                this.answerChannel()
+              );
               if (qr.success) {
                 this.store.markChapterDone(ensureProgress(), chapter.onclick);
                 summary.completed++;
