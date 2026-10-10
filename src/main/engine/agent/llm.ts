@@ -189,15 +189,38 @@ export async function askQuizByVision(
 
 /** 单次调用 */
 async function callOnce(cfg: VisionConfig, list: ShotInput[], _opts: any, body: any): Promise<QuizAnswer[]> {
-  const resp = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify(body),
-  });
+  // 视觉模型单批实测 14-38s，给 75s 余量；到期必须中断，
+  // 否则中转服务不响应时会永久挂起，stall 检测也被 freeze 住无法判定卡住。
+  const LIMIT_MS = 75000;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
+  const t0 = Date.now();
+  let resp: Response;
+  try {
+    resp = await fetch(`${cfg.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } catch (e: any) {
+    clearTimeout(timer);
+    if (e?.name === 'AbortError') {
+      throw new Error(`视觉接口超时（${LIMIT_MS / 1000}s 无响应）`);
+    }
+    throw new Error(`视觉接口连接失败：${String(e?.message || e).slice(0, 60)}`);
+  }
+  clearTimeout(timer);
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
   if (!resp.ok) {
     throw new Error(`视觉接口 ${resp.status}${resp.status === 401 ? '（key 无效）' : ''}`);
   }
-  const json: any = await resp.json();
+  let json: any;
+  try {
+    json = await resp.json();
+  } catch {
+    throw new Error(`视觉接口返回非 JSON（${secs}s）`);
+  }
   const choice = json?.choices?.[0];
   const raw: string = choice?.message?.content || '';
   const finish = choice?.finish_reason || '';

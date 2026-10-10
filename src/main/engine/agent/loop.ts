@@ -315,6 +315,12 @@ export async function runAgent(
   let clicked = 0;
   let reason = '';
 
+  // 真实生效的总时限：超时就地收手，把已拿到的答案用掉，
+  // 让视频流程能继续，而不是无限期停在答题阶段。
+  const budgetMs = goal.budget?.maxMs ?? 300000;
+  const overBudget = () => Date.now() - t0 > budgetMs;
+  const leftMs = () => Math.max(0, budgetMs - (Date.now() - t0));
+
   const ctx: AgentCtx = {
     page,
     box: null,
@@ -344,10 +350,21 @@ export async function runAgent(
     const answers: QuizAnswer[] = [];
     for (let i = 0; i < perQ.length; i += BATCH_SIZE) {
       deps.checkpoint();
+      // 总时限已到就不再发新请求：用手上已有的答案，剩下的题保持未作答
+      if (overBudget()) {
+        deps.log(
+          'warn',
+          `  已用时 ${Math.round((Date.now() - t0) / 1000)}s，超出 ${Math.round(budgetMs / 1000)}s 预算，剩余题目跳过`
+        );
+        break;
+      }
       const batch = perQ.slice(i, i + BATCH_SIZE).map(p => ({ ...p.shot, q: p.q }));
       const bt = Date.now();
       try {
-        const got = await askQuizByVision(cfg, batch, { maxMs: goal.budget.maxMs });
+        // 单请求上限不得超过剩余预算，否则最后一批仍可能超支
+        const got = await askQuizByVision(cfg, batch, {
+          maxMs: Math.min(budgetMs, leftMs()),
+        });
         answers.push(...got);
         steps++;
         deps.log(
@@ -459,7 +476,7 @@ export function quizGoal(doneSelector?: string): AgentGoal {
     describe: '回答测验并提交',
     doneSelector,
     maxQuestions: 20,
-    budget: { maxSteps: 40, maxMs: 300000 },
+    budget: { maxSteps: 40, maxMs: 240000 },
     done: async ctx => {
       if (!doneSelector) return true;
       try {

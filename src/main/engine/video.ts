@@ -3,6 +3,7 @@ import { forcePlay, wakeUp, installPauseSpy, setVideoRate } from './keepalive';
 import type { EngineHooks } from './hooks';
 import { handleQuizPopup } from './quiz';
 import { runAgent, quizGoal } from './agent/loop';
+import { withTimeout, WatchdogError } from './watchdog';
 
 export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
 
@@ -22,6 +23,49 @@ async function findQuizSelector(page: import('playwright').Page): Promise<string
 
 function rethrowIfStopped(h: EngineHooks, e: unknown) {
   if (h.ctl.isStopped) throw e;
+}
+
+/** 仅中止当前这轮答题，不影响整个刷课任务 */
+class QuizAborted extends Error {
+  constructor() {
+    super('本轮答题已放弃');
+    this.name = 'QuizAborted';
+  }
+}
+
+/** 单轮 AI 答题的硬上限：超过即放弃本轮，让视频流程继续（下一轮可重新触发） */
+const QUIZ_WATCHDOG_MS = 150000;
+
+/**
+ * AI 超时/失败后清理可能残留的题目弹窗。
+ * 不点任何选项——只把遮挡层关掉，让视频能继续播放；
+ * 已作答的题由平台自行处理，未作答的保持空白，交还给用户。
+ */
+async function dismissLeftoverPopup(page: Page, h: EngineHooks) {
+  const CLOSE_SELECTORS = [
+    '.layui-layer-close',
+    '.layui-layer-closeico',
+    '.layui-layer-btn0',
+    '[class*="close"]',
+    '[aria-label="Close"]',
+    '[aria-label="close"]',
+  ];
+  for (const sel of CLOSE_SELECTORS) {
+    try {
+      const n = await page.locator(sel).count().catch(() => 0);
+      if (!n) continue;
+      const loc = page.locator(sel).first();
+      if (!(await loc.isVisible().catch(() => false))) continue;
+      await loc.click({ timeout: 1500 }).catch(() => {});
+      h.log('info', '    → 已关闭残留的题目弹窗');
+      return true;
+    } catch {}
+  }
+  // 兜底：ESC 关闭 iframe 内的弹层
+  try {
+    await page.keyboard.press('Escape');
+  } catch {}
+  return false;
 }
 
 /**
@@ -126,19 +170,32 @@ export async function waitForVideoEnd(
       lastUrl = currentUrl;
     }
 
-    // 随堂练习/测验：视频中途弹题会让视频暂停，先检测并答题，再看视频状态
+// 随堂练习/测验：视频中途弹题会让视频暂停，先检测并答题，再看视频状态
     // 答题期间冻结 stall 计时，否则会把「正在答题」误判为卡住
     if (useAgent) {
       const sel = await findQuizSelector(page);
       if (sel) {
         stall.freeze(true);
+        // 硬性看门狗：即使 agent 内部或网络请求出问题，video.ts 这层
+        // 也不能无限等下去，超时直接放弃本轮答题，视频流程继续。
+        let aiTimedOut = false;
+        let cancelQuiz = false;
         try {
           h.log('info', '    → 检测到题目，启动 AI 答题');
-          const r = await runAgent(h.vision(), page, quizGoal(sel), {
-            log: (l, m) => h.log(l, m),
-            checkpoint: () => ctl.throwIfStopped(),
-            sleep: ms => ctl.sleep(ms),
-          });
+          const r = await withTimeout(
+            runAgent(h.vision(), page, quizGoal(sel), {
+              log: (l, m) => h.log(l, m),
+              checkpoint: () => {
+                ctl.throwIfStopped();
+                if (cancelQuiz) throw new QuizAborted();
+              },
+              sleep: ms => ctl.sleep(ms),
+            }),
+            QUIZ_WATCHDOG_MS,
+            () => {
+              cancelQuiz = true;
+            }
+          );
           if (r.clicked > 0) {
             quizPopups += 1;
             quizAnswered += r.clicked;
@@ -150,10 +207,19 @@ export async function waitForVideoEnd(
           }
         } catch (e) {
           rethrowIfStopped(h, e);
-          h.log('warn', `⚠ 答题异常：${(e as any)?.message || e}`);
+          if (e instanceof WatchdogError) {
+            aiTimedOut = true;
+            h.log('warn', `    ⚠ AI 答题超时（${QUIZ_WATCHDOG_MS / 1000}s），已跳过，继续播放视频`);
+          } else if (e instanceof QuizAborted) {
+            // 看门狗触发后 agent 自行退出，无需再报异常
+          } else {
+            h.log('warn', `⚠ 答题异常：${(e as any)?.message || e}`);
+          }
         } finally {
           stall.reset();
         }
+        // 超时后清掉可能遮挡视频的弹窗，避免视频被永久挡住
+        if (aiTimedOut) await dismissLeftoverPopup(page, h);
       }
     } else if (apiKey) {
       // 未开 Agent 开关时回退到纯文本答题
