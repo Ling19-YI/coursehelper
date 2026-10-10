@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { CloudDownloadOutlined } from '@ant-design/icons';
 import { useApp } from '../state';
 import type { UpdateState } from '../../shared/api';
-import donateQr from '../donate.jpg';
+import donateQr from '../donate.png';
 
 const fmtSize = (b: number) => (b > 0 ? `${(b / 1024 / 1024).toFixed(1)} MB` : '—');
 
