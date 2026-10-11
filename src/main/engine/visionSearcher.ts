@@ -83,6 +83,25 @@ export function validate(answer: string, q: QuizQuestion): boolean {
     .every(c => valid.has(c));
 }
 
+/**
+ * 从响应里取文本，兼容各家 OpenAI 兼容实现的差异。
+ *
+ * 标准形态是 string，但不少网关/推理模型给的是分段数组：
+ *   content: [{ type: 'text', text: '...' }]
+ * 直接当字符串用会在 parseAnswers 里炸掉（数组没有 .match），所以必须归一。
+ */
+export function extractText(json: any): string {
+  const msg = json?.choices?.[0]?.message;
+  const c = msg?.content ?? '';
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) {
+    return c
+      .map((p: any) => (typeof p === 'string' ? p : p?.text ?? ''))
+      .join('');
+  }
+  return c == null ? '' : String(c);
+}
+
 export class VisionSearcher implements Searcher {
   readonly name = '截图识别';
 
@@ -149,55 +168,70 @@ export class VisionSearcher implements Searcher {
 
   private async callApi(content: any[]): Promise<string> {
     const ch = this.o.channel;
+    const messages = [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content },
+    ];
+    // 只用 OpenAI 兼容格式的核心字段。用户可以填任意支持 chat/completions
+    // 与 image_url 的模型（DeepSeek、通义、GLM、豆包、自建代理都行），所以
+    // temperature / max_tokens 不能写死——部分实现不收这两个参数。
+    // 先按标准发，400 了再用最小体重试一次，而不是让用户去猜该配哪个模型。
+    const payload = (extra: Record<string, unknown>) => ({
+      model: ch.model,
+      messages,
+      stream: false,
+      ...extra,
+    });
+
+    let resp = await this.post(payload({ temperature: 0, max_tokens: 800 }));
+    if (resp.status === 400) resp = await this.post(payload({}));
+
+    if (!resp.ok) {
+      // 必须带上响应体：只看 HTTP 400 无法区分是模型名错、参数不支持还是格式错误
+      let detail = '';
+      try {
+        detail = (await resp.text()).replace(/\s+/g, ' ').slice(0, 700);
+      } catch {}
+      throw new Error(`HTTP ${resp.status}${detail ? ' ' + detail : ''}`);
+    }
+
+    // 先取原文再解析：resp.json() 遇到空体只抛 "Unexpected end of JSON input"，
+    // 完全看不出是网关截断了、返回了 SSE、还是真返回了空。
+    const raw = await resp.text();
+    const ct = resp.headers.get('content-type') || '';
+    if (!raw.trim()) throw new Error(`HTTP ${resp.status} 空响应体 content-type=${ct}`);
+    let json: any;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      throw new Error(`HTTP ${resp.status} 非 JSON 响应 content-type=${ct} 前 200 字: ${raw.slice(0, 200)}`);
+    }
+
+    const out = extractText(json);
+    const msg = json?.choices?.[0]?.message;
+    // 推理模型会把 token 花在 reasoning_content 上，content 可能整段为空。
+    // 这不是失败，但必须报出来，否则会误判成「模型答不出来」。
+    if (!out && msg?.reasoning_content) {
+      throw new Error(
+        `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
+          `max_tokens 太小被推理吃光了`
+      );
+    }
+    return out;
+  }
+
+  /** 单次 POST，自带超时 */
+  private async post(payload: any): Promise<Response> {
+    const ch = this.o.channel;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.o.timeoutMs ?? 60000);
     try {
-      const resp = await fetch(`${ch.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      return await fetch(`${ch.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ch.apiKey}` },
-        body: JSON.stringify({
-          model: ch.model,
-          messages: [
-            { role: 'system', content: SYSTEM },
-            { role: 'user', content },
-          ],
-          temperature: 0,
-          max_tokens: 800,
-        }),
+        body: JSON.stringify(payload),
         signal: ctrl.signal,
       });
-      if (!resp.ok) {
-        // 必须带上响应体：只看 HTTP 400 无法区分是模型名错、参数不支持还是格式错误
-        let detail = '';
-        try {
-          detail = (await resp.text()).replace(/\s+/g, ' ').slice(0, 700);
-        } catch {}
-        throw new Error(`HTTP ${resp.status}${detail ? ' ' + detail : ''}`);
-      }
-      // 先取原文再解析：resp.json() 遇到空体只抛 "Unexpected end of JSON input"，
-      // 完全看不出是网关截断了、返回了 SSE、还是真返回了空。
-      const raw = await resp.text();
-      const ct = resp.headers.get('content-type') || '';
-      if (!raw.trim()) {
-        throw new Error(`HTTP ${resp.status} 空响应体 content-type=${ct}`);
-      }
-      let json: any;
-      try {
-        json = JSON.parse(raw);
-      } catch {
-        throw new Error(`HTTP ${resp.status} 非 JSON 响应 content-type=${ct} 前 200 字: ${raw.slice(0, 200)}`);
-      }
-      const msg = json?.choices?.[0]?.message;
-      const out = msg?.content || '';
-      // 推理模型会把 token 花在 reasoning_content 上，content 可能整段为空。
-      // 这不是失败，但必须报出来，否则会误判成「模型答不出来」。
-      if (!out && msg?.reasoning_content) {
-        throw new Error(
-          `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
-            `max_tokens 太小被推理吃光了`
-        );
-      }
-      return out;
     } finally {
       clearTimeout(timer);
     }

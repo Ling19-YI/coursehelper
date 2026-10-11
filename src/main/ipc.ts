@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ChaoxingEngine } from './engine';
 import type { Store } from './store';
+import { DEFAULT_SETTINGS } from '../shared/types';
 import type { Session } from './session';
 import type { Course, EngineEvent } from '../shared/types';
 import type { AppInfo } from '../shared/api';
@@ -42,9 +43,12 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
       getMuted: () => store.settings.muted !== false,
       getAgentEnabled: () => !!store.settings.agentEnabled,
       getVision: () => ({
-        baseUrl: store.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1',
+        // 兜底一律取 DEFAULT_SETTINGS，不要在这里另写一份模型名默认值。
+        // 这里曾经漏写成 mimo-v2.6-flash——用户在设置里把模型清空时会命中它，
+        // 而它带图请求必 500，等于「清空模型 = 静默失能」。
+        baseUrl: store.settings.visionBaseUrl || DEFAULT_SETTINGS.visionBaseUrl,
         apiKey: store.loadVisionKey() ?? '',
-        model: store.settings.visionModel || 'mimo-v2.6-flash',
+        model: store.settings.visionModel || DEFAULT_SETTINGS.visionModel,
       }),
       getSubmitCoverRate: () => {
         const v = Number(store.settings.submitCoverRate);
