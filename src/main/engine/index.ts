@@ -28,6 +28,8 @@ export interface EngineOptions {
   getDeepseekKey(): string;
   /** 视频倍速（1 / 1.25 / 1.5 / 2） */
   getVideoSpeed(): number;
+    /** 视频静音（默认 true） */
+    getMuted(): boolean;
   /** AI 答题总开关 */
   getAgentEnabled(): boolean;
   /** 多模态视觉服务配置 */
@@ -72,6 +74,7 @@ export class ChaoxingEngine {
         const r = Number(opts.getVideoSpeed());
         return isNaN(r) ? 1 : Math.min(2, Math.max(1, r));
       },
+      muted: () => opts.getMuted() !== false,
       agentEnabled: () => !!opts.getAgentEnabled(),
       vision: () => opts.getVision(),
       answerPopup: () => !!opts.getAnswerPopup(),

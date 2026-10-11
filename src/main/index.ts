@@ -22,10 +22,24 @@ let win: BrowserWindow | null = null;
 let session: Session | null = null;
 let store: Store | null = null;
 
+/** 学习通页面可用宽度下限：低于此值播放器与目录会挤在一起显示不全 */
+const MIN_VIEW_WIDTH = 820;
+/** 左侧面板宽度上限，避免宽屏下日志/设置区空得太多 */
+const MAX_PANEL_WIDTH = 620;
+
 function layout() {
   if (!win || !session) return;
   const [w, h] = win.getContentSize();
-  const panel = Math.max(420, Math.floor(w * 0.46));
+  // 先按比例给右侧，再确保它不低于 MIN_VIEW_WIDTH。
+  // 旧算法用 Math.max(420, w*0.46) 优先保障左侧面板，
+  // 窗口收到最小宽度时右侧只剩约 560px，学习通页面必然显示不全。
+  let view = Math.floor(w * 0.54);
+  if (view < MIN_VIEW_WIDTH) view = Math.min(MIN_VIEW_WIDTH, w);
+  let panel = w - view;
+  if (panel > MAX_PANEL_WIDTH) {
+    panel = MAX_PANEL_WIDTH;
+    view = w - panel;
+  }
   session.setBounds({ x: panel, y: 0, width: Math.max(0, w - panel), height: h });
 }
 
@@ -33,10 +47,11 @@ async function createWindow() {
   store = new Store();
 
   win = new BrowserWindow({
-    width: 1360,
-    height: 880,
-    minWidth: 1040,
-    minHeight: 640,
+    width: 1440,
+    height: 900,
+    // 最小宽度 = 左侧面板下限 420 + 右侧学习通下限 820
+    minWidth: 1240,
+    minHeight: 700,
     backgroundColor: '#0b1220',
     autoHideMenuBar: true,
     show: false,
