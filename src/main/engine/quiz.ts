@@ -588,36 +588,101 @@ export async function submitQuizIn(
 ): Promise<boolean> {
   const scope = (sel: string) =>
     containerSelector ? frame.locator(containerSelector).locator(sel) : frame.locator(sel);
-  const btns = [
-    'button:has-text("\u786e\u5b9a")',
-    'button:has-text("\u63d0\u4ea4")',
-    'a:has-text("\u63d0\u4ea4")',
-    'button:has-text("\u4ea4\u5377")',
-    'button:has-text("\u786e\u8ba4")',
-    'button:has-text("\u5b8c\u6210")',
-    'button:has-text("\u63d0\u4ea4\u7b54\u6848")',
+
+  // -- 第一步：点页面上的提交按钮 -------------------------------------
+  const BTNS = [
+    'button:has-text("提交")',
+    'a:has-text("提交")',
+    'button:has-text("确定")',
+    'button:has-text("交卷")',
+    'button:has-text("确认")',
+    'button:has-text("完成")',
+    'button:has-text("提交答案")',
   ];
-  for (const b of btns) {
-    try {
-      const loc = scope(b);
-      const n = await loc.count();
-      for (let i = n - 1; i >= 0; i--) {
-        try {
-          await loc.nth(i).click({ force: true, timeout: 2000 });
-          await h.ctl.sleep(1200);
-          const confirm = page.locator(
-            '.layui-layer-btn0, .layui-layer-btn1, button:has-text("\u786e\u5b9a"), .el-message-box__btns button'
-          );
-          if (await confirm.count()) {
-            await confirm.last().click({ force: true, timeout: 2000 }).catch(() => {});
-            await h.ctl.sleep(1000);
-          }
-          h.log('ok', `    \u2713 ${label}`);
-          return true;
-        } catch {}
-      }
-    } catch {}
+  let clicked = false;
+  for (const b of BTNS) {
+    const loc = scope(b);
+    const n = await loc.count().catch(() => 0);
+    for (let i = n - 1; i >= 0 && !clicked; i--) {
+      try {
+        await loc.nth(i).click({ force: true, timeout: 2000 });
+        clicked = true;
+      } catch {}
+    }
+    if (clicked) break;
   }
+  if (!clicked) {
+    h.log('warn', `    x ${label}：找不到提交按钮`);
+    return false;
+  }
+  h.log('info', `    → 已点提交，等待确认框`);
+
+  // -- 第二步：点确认框里的确认按钮 -----------------------------------
+  // 超星真实结构（线性代数真机实测）：
+  //   #workpop(.maskDiv) > .popDiv.wid440.Marking
+  //     <a id="popok" class="jb_btn jb_btn_92">提交</a>   ← 确认
+  //     <a id="popno" class="btnBlue btn_92_cancel">取消</a>
+  //
+  // 两个坑：
+  //  1. 这个框在**第三个 frame** 里（外层课程页 openc=...），既不是测验 frame
+  //     也不是主页面。必须在 page.frames() 里全找。
+  //  2. 按钮是 <a> 不是 <button>，且取消和提交长得一模一样。按位置或 nth 猜
+  //     会点到取消，等于白跑一趟还可能丢掉已填的卷。
+  const isConfirm = (t: string | null) => !!t && /^(提交|确定|确认|交卷|完成|是|OK)$/.test(t.trim());
+
+  const deadline = Date.now() + 20000;
+  let confirmed = false;
+  while (Date.now() < deadline && !confirmed) {
+    h.ctl.throwIfStopped();
+    for (const root of page.frames()) {
+      if (confirmed) break;
+      // 先按已知 id 直取，最稳
+      const popok = root.locator('#popok');
+      if ((await popok.count().catch(() => 0)) && (await popok.first().isVisible().catch(() => false))) {
+        await popok.first().click({ force: true, timeout: 2500 }).catch(() => {});
+        confirmed = true;
+        break;
+      }
+      // 再退回按文字匹配（别的章节可能有不同皮肤）
+      const btns2 = root.locator('.popBottom a, .popDiv a, .layui-layer a, .layui-layer button, button');
+      const m = await btns2.count().catch(() => 0);
+      for (let j = m - 1; j >= 0; j--) {
+        const txt = await btns2.nth(j).innerText().catch(() => null);
+        if (!isConfirm(txt)) continue;
+        if (!(await btns2.nth(j).isVisible().catch(() => false))) continue;
+        await btns2.nth(j).click({ force: true, timeout: 2500 }).catch(() => {});
+        confirmed = true;
+        break;
+      }
+    }
+    if (!confirmed) await h.ctl.sleep(500);
+  }
+  if (!confirmed) {
+    h.log('warn', `    x ${label}：确认框未出现或点不到，**未提交**`);
+    return false;
+  }
+
+  // -- 第三步：验证真的提交了 -----------------------------------------
+  // 点到按钮 ≠ 提交成功。只有页面出现结果标记才算数。
+  // 真机踩过：旧实现点完就 return true，日志写「成功」，成绩纹丝不动。
+  const DONE = /提交成功|已提交|已完成|你的得分|得分[:：\s]|正确率|查看结果|作业已/;
+  const end = Date.now() + 25000;
+  while (Date.now() < end) {
+    h.ctl.throwIfStopped();
+    for (const root of page.frames()) {
+      const txt = await root
+        .locator('body')
+        .first()
+        .innerText()
+        .catch(() => '');
+      if (DONE.test(txt)) {
+        h.log('ok', `    ✓ ${label}（已验证页面出现结果标记）`);
+        return true;
+      }
+    }
+    await h.ctl.sleep(600);
+  }
+h.log('warn', `    x ${label}：点了确认但页面没出现结果标记，**不确定成功**`);
   return false;
 }
 

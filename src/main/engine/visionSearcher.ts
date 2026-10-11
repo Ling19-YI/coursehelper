@@ -119,15 +119,14 @@ export class VisionSearcher implements Searcher {
 
       const content: any[] = [{ type: 'text', text: buildUserPrompt(items) }];
       for (const img of images) {
-        content.push({ type: 'text', text: '' });
-        content.push({ type: 'image_url', image_url: { url: img, detail: 'original' } });
+        content.push({ type: 'image_url', image_url: { url: img } });
       }
 
       let text = '';
       try {
         text = await this.callApi(content);
       } catch (e: any) {
-        this.o.log?.('warn', `  \u26a0 \u622a\u56fe\u8bc6\u522b\u8bf7\u6c42\u5931\u8d25\uff1a${String(e?.message || e).slice(0, 60)}`);
+        this.o.log?.('warn', `  \u26a0 \u622a\u56fe\u8bc6\u522b\u8bf7\u6c42\u5931\u8d25\uff1a${String(e?.message || e).slice(0, 500)}`);
         continue;
       }
 
@@ -169,9 +168,38 @@ export class VisionSearcher implements Searcher {
         }),
         signal: ctrl.signal,
       });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const json: any = await resp.json();
-      return json?.choices?.[0]?.message?.content || '';
+      if (!resp.ok) {
+        // 必须带上响应体：只看 HTTP 400 无法区分是模型名错、参数不支持还是格式错误
+        let detail = '';
+        try {
+          detail = (await resp.text()).replace(/\s+/g, ' ').slice(0, 700);
+        } catch {}
+        throw new Error(`HTTP ${resp.status}${detail ? ' ' + detail : ''}`);
+      }
+      // 先取原文再解析：resp.json() 遇到空体只抛 "Unexpected end of JSON input"，
+      // 完全看不出是网关截断了、返回了 SSE、还是真返回了空。
+      const raw = await resp.text();
+      const ct = resp.headers.get('content-type') || '';
+      if (!raw.trim()) {
+        throw new Error(`HTTP ${resp.status} 空响应体 content-type=${ct}`);
+      }
+      let json: any;
+      try {
+        json = JSON.parse(raw);
+      } catch {
+        throw new Error(`HTTP ${resp.status} 非 JSON 响应 content-type=${ct} 前 200 字: ${raw.slice(0, 200)}`);
+      }
+      const msg = json?.choices?.[0]?.message;
+      const out = msg?.content || '';
+      // 推理模型会把 token 花在 reasoning_content 上，content 可能整段为空。
+      // 这不是失败，但必须报出来，否则会误判成「模型答不出来」。
+      if (!out && msg?.reasoning_content) {
+        throw new Error(
+          `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
+            `max_tokens 太小被推理吃光了`
+        );
+      }
+      return out;
     } finally {
       clearTimeout(timer);
     }
