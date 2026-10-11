@@ -108,7 +108,10 @@ function extractInPage(): { questions: QuizQuestion[] } {
     }
     for (const el of els) {
       const t = clean(el.innerText || el.textContent || '');
-      if (t.length < 4 || t.length > 1200) continue;
+      // 显式命中 .TiMu 之类的题目容器时不做长度上限：含 MathML/公式的题
+      // innerText 轻易超过 1200（公式注解文本全算进去），一旦按上限过滤就会
+      // 整题丢失，只剩下被误当成题目的选项容器。
+      if (t.length < 4) continue;
       if (seen.has(el)) continue;
       seen.add(el);
       picked.push(el);
