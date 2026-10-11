@@ -89,23 +89,40 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
     if (info) return { kind: info.kind as BlockKind, matched: info.matched, hint: info.hint };
   }
 
-  // 2) 弹层没命中时，退化为全页文本关键词匹配（限流类弹窗常没有标准 class）
+// 2) 弹层没命中时，退化为全页文本关键词匹配（限流类弹窗常没有标准 class）
   //
-  // 必须先剔除随堂弹题的文本：题干本身就是页面 DOM 的一部分，「风险」「验证码」
+  // 必须剔除随堂弹题的文本：题干本身就是页面 DOM 的一部分，「风险」「验证码」
   // 「人脸」在风险管理、计算机安全这类课程的题目里是普通词汇。混进去会被当成
   // 平台安全验证，引擎进入等待人工介入的死循环，弹题再也答不到，还会骗用户
-  // 去扫码。弹层容器那条路（LAYER_SELECTORS）不用剔——ans-videoquiz 的类名
-  // 本来就不在其中，真弹窗叠在弹题上时仍然该拦住。
+  // 去扫码找根本不存在的验证框。
+  //
+  // ⚠️ 这里**必须用真实 body.innerText，不能 cloneNode**。游离节点不参与布局，
+  // Chromium 下 innerText 退化成 textContent，隐藏弹窗模板的文字全被算进来：
+  //   真实 body.innerText =    715 字，不命中
+  //   clone.innerText     =  99987 字，命中「扫码」
+  // 曾用 clone 版修过一次，直接把这个视频章节判成扫码弹窗，引擎死等 3 分钟。
+  //
+  // 另外别试图用 TreeWalker + getComputedStyle 手工复刻 innerText 的可见性
+  // 语义 —— innerText 还会按布局盒模型排除零尺寸元素，手工复刻不准（实测
+  // 手工版 13825 字，仍误命中「扫码」）。正确做法是就地移除再恢复：
+  // 在真实 body 上短暂摘掉弹题节点，读一次 innerText，再放回去。
   try {
-    const txt = await frame.evaluate(() => {
-      const clone = document.body?.cloneNode(true) as HTMLElement | null;
-      if (!clone) return '';
-      clone.querySelectorAll('.ans-videoquiz, #videoquiz-submit').forEach(el => el.remove());
-      return clone.innerText || '';
-    });
+    const taken = await frame.evaluate((quizSel: string) => {
+      const removed: Array<{ el: Element; next: Node | null }> = [];
+      document.querySelectorAll(quizSel).forEach(el => {
+        const parent = el.parentNode;
+        if (!parent) return;
+        removed.push({ el, next: el.nextSibling });
+        parent.removeChild(el);
+      });
+      const txt = document.body?.innerText || '';
+      // 立刻放回去，别让 DOM 处于被改动过的状态（后续定位要靠真实节点）
+      for (const r of removed) r.el.parentNode?.appendChild(r.el);
+      return txt;
+    }, '.ans-videoquiz, #videoquiz-submit');
     for (const k of KEYWORDS) {
-      if (k.re.test(txt)) {
-        return { kind: k.kind, matched: (txt.match(k.re) || [''])[0], hint: k.hint };
+      if (k.re.test(taken)) {
+        return { kind: k.kind, matched: (taken.match(k.re) || [''])[0], hint: k.hint };
       }
     }
   } catch {}
