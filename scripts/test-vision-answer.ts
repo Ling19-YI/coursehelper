@@ -9,7 +9,7 @@
  *
  * npx tsx scripts/test-vision-answer.ts
  */
-import { parseAnswers, validate } from '../src/main/engine/visionSearcher';
+import { parseAnswers, validate, extractText } from '../src/main/engine/visionSearcher';
 import type { QuizQuestion } from '../src/main/engine/quizTypes';
 
 let failed = 0;
@@ -73,6 +73,30 @@ ok('空答案 → 丢弃', !validate('', q(['A', 'B', 'C', 'D'])));
 ok('判断题选项标签是「对/错」时，模型答 A → 丢弃', !validate('A', q(['对', '错'])));
 ok('判断题选项标签是「对/错」时，模型答 对 → 通过', validate('对', q(['对', '错'])));
 ok('无选项的题一律丢弃（无从校验）', !validate('A', q([])));
+
+console.log('\n=== extractText（兼容各家 OpenAI 兼容实现的响应差异）===');
+const J = '{"answers":[{"id":1,"choices":["C"]}]}';
+eq('content 是标准字符串', extractText({ choices: [{ message: { content: J } }] }), J);
+eq(
+  'content 是分段数组（部分网关/推理模型）',
+  extractText({ choices: [{ message: { content: [{ type: 'text', text: J }] } }] }),
+  J
+);
+eq(
+  '数组里混有非文本段',
+  extractText({ choices: [{ message: { content: [{ type: 'image' }, { type: 'text', text: 'AB' }] } }] }),
+  'AB'
+);
+eq('content 为 null', extractText({ choices: [{ message: { content: null } }] }), '');
+eq('choices 缺失', extractText({}), '');
+eq('content 是裸字符串数组', extractText({ choices: [{ message: { content: ['x', 'y'] } }] }), 'xy');
+
+console.log('\n=== 端到端：分段数组响应也必须能取出答案 ===');
+eq(
+  '数组形态的 content 走完 parseAnswers',
+  [...parseAnswers(extractText({ choices: [{ message: { content: [{ type: 'text', text: J }] } }] }))],
+  [[1, 'C']]
+);
 
 console.log(failed ? `\nFAIL: ${failed} 项未通过` : '\nPASS: 截图识题答案校验验证通过');
 if (failed) process.exit(1);

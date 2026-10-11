@@ -108,7 +108,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   answerPopup: false,
   submitCoverRate: 0.8,
   visionBaseUrl: 'https://tokendance.space/gateway/v1',
-  // 必须是网关模型列表里真实存在的**多模态**模型。mimo-v2.6-flash 带图请求
-  // 直接 500，截图识题会全部失败；mimo-v2.5 是原生全模态，实测可用。
+  // 视觉模型名完全由用户决定，这里只是给个能用的默认值。
+  // 唯一要求是支持 OpenAI 兼容的 chat/completions + image_url（原生多模态）。
+  // 实测可用：mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v / glm-5v-turbo；
+  // deepseek-v4-pro 之类纯文本模型不吃图，会返回空答案。
   visionModel: 'mimo-v2.5',
 };

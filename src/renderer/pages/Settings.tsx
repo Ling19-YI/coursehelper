@@ -181,12 +181,7 @@ export default function Settings() {
             value={visionModel}
             onChange={e => setVisionModel(e.target.value)}
             autoComplete="off"
-            status={visionModel.trim() === 'mimo-v2.6-flash' ? 'warning' : undefined}
-            title={
-              visionModel.trim() === 'mimo-v2.6-flash'
-                ? '该模型不在网关模型列表内，带图请求会返回 500，截图识题将全部失败'
-                : undefined
-            }
+            title="任何支持 OpenAI 兼容 chat/completions + image_url 的多模态模型都可以，如通义 qwen3-vl-plus、glm-4.6v、mimo-v2.5 等；纯文本模型吃不了图"
           />
         </Space>
         <div className="muted" style={{ marginTop: 8 }}>
