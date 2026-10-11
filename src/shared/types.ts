@@ -105,5 +105,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   answerPopup: false,
   submitCoverRate: 0.8,
   visionBaseUrl: 'https://tokendance.space/gateway/v1',
-  visionModel: 'mimo-v2.6-flash',
+  // 必须是网关模型列表里真实存在的**多模态**模型。mimo-v2.6-flash 带图请求
+  // 直接 500，截图识题会全部失败；mimo-v2.5 是原生全模态，实测可用。
+  visionModel: 'mimo-v2.5',
 };

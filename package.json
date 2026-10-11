@@ -13,7 +13,9 @@
     "dist": "npm run build && electron-builder",
     "smoke": "node scripts/smoke.mjs",
     "spike": "node scripts/spike.mjs",
-    "test:answer": "tsx scripts/test-answer-chain.ts"
+    "test:answer": "tsx scripts/test-answer-chain.ts",
+    "test:vision": "tsx scripts/test-vision-answer.ts",
+    "test": "npm run typecheck && npm run test:answer && npm run test:vision"
   },
   "devDependencies": {
     "@ant-design/icons": "^6.3.4",

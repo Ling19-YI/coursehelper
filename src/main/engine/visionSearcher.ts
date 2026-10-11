@@ -50,7 +50,7 @@ function buildUserPrompt(items: Array<{ id: number; stem: string; options: QuizO
 }
 
 /** 从模型的 JSON 里取答案，容错解析（模型偶尔会包 markdown 围栏） */
-function parseAnswers(text: string): Map<number, string> {
+export function parseAnswers(text: string): Map<number, string> {
   const out = new Map<number, string>();
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) return out;
@@ -73,7 +73,7 @@ function parseAnswers(text: string): Map<number, string> {
 }
 
 /** 答案必须落在选项范围内，否则丢弃 */
-function validate(answer: string, q: QuizQuestion): boolean {
+export function validate(answer: string, q: QuizQuestion): boolean {
   if (!answer) return false;
   const valid = new Set(q.options.map(o => o.label.toUpperCase()));
   if (!valid.size) return false;
@@ -131,7 +131,6 @@ export class VisionSearcher implements Searcher {
       }
 
       const got = parseAnswers(text);
-      const byIndex = new Map(items.map(it => [it.id, it]));
       let hit = 0;
       for (const [id, answer] of got) {
         const q = batch.find(x => x.index === id);
@@ -144,7 +143,6 @@ export class VisionSearcher implements Searcher {
         hit++;
       }
       if (hit) this.o.log?.('info', `  \u2713 \u622a\u56fe\u8bc6\u522b ${hit}/${items.length}`);
-      void byIndex;
     }
     return result;
   }

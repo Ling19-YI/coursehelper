@@ -57,6 +57,14 @@ export class Store {
     this.settings = { ...DEFAULT_SETTINGS, ...disk };
     if (!this.settings.dataDir) this.settings.dataDir = this.dataDir;
 
+    // mimo-v2.6-flash 不在网关模型列表里，带图请求直接 500（网关模型列表
+    // GET /gateway/v1/models 实测确认）。截图识题链路由它会 100% 失败，
+    // 而且是静默失败——题留空、覆盖率掉下来、闸门拦下，用户只看到「没答上」。
+    // 老配置里已经存了这个值的要一并换掉，否则改了默认值也没用。
+    if (this.settings.visionModel === 'mimo-v2.6-flash') {
+      this.settings.visionModel = DEFAULT_SETTINGS.visionModel;
+    }
+
     this.migrateLegacy();
     if (!fs.existsSync(this.settings.dataDir)) fs.mkdirSync(this.settings.dataDir, { recursive: true });
   }

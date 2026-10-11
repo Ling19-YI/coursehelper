@@ -28,7 +28,7 @@ export default function Settings() {
   const [popupOn, setPopupOn] = useState(false);
   const [visionKey, setVisionKey] = useState('');
   const [visionBaseUrl, setVisionBaseUrl] = useState('https://tokendance.space/gateway/v1');
-  const [visionModel, setVisionModel] = useState('mimo-v2.6-flash');
+  const [visionModel, setVisionModel] = useState('mimo-v2.5');
   const [visionInfo, setVisionInfo] = useState<{ configured: boolean; hint: string }>({
     configured: false,
     hint: '',
@@ -41,7 +41,7 @@ export default function Settings() {
       setDataDir(a.settings.dataDir ?? '');
       setSpeed(Number(a.settings.videoSpeed) || 1);
       setVisionBaseUrl(a.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1');
-      setVisionModel(a.settings.visionModel || 'mimo-v2.6-flash');
+      setVisionModel(a.settings.visionModel || 'mimo-v2.5');
       setAgentOn(!!a.settings.agentEnabled);
       setCoverRate(
         a.settings.submitCoverRate === undefined ? 0.8 : Number(a.settings.submitCoverRate)
@@ -81,7 +81,7 @@ export default function Settings() {
         submitCoverRate: coverRate,
         answerPopup: popupOn,
         visionBaseUrl: visionBaseUrl.trim(),
-        visionModel: visionModel.trim() || 'mimo-v2.6-flash',
+        visionModel: visionModel.trim() || 'mimo-v2.5',
       });
       window.ch.getVision().then(setVisionInfo).catch(() => {});
       message.success('设置已保存');
@@ -174,10 +174,16 @@ export default function Settings() {
             autoComplete="off"
           />
           <Input
-            placeholder="模型名"
+            placeholder="模型名（需支持图片输入）"
             value={visionModel}
             onChange={e => setVisionModel(e.target.value)}
             autoComplete="off"
+            status={visionModel.trim() === 'mimo-v2.6-flash' ? 'warning' : undefined}
+            title={
+              visionModel.trim() === 'mimo-v2.6-flash'
+                ? '该模型不在网关模型列表内，带图请求会返回 500，截图识题将全部失败'
+                : undefined
+            }
           />
         </Space>
         <div className="muted" style={{ marginTop: 8 }}>
