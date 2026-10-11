@@ -162,6 +162,27 @@ function extractInPage(): { questions: QuizQuestion[] } {
   picked.slice(0, 60).forEach((el, qi) => {
     const qIdx = qi + 1;
     const raw = el.innerText || el.textContent || '';
+
+    // ---- 挡掉「长得像题」但根本不是题的元素 ----
+    //
+    // 实测（线性代数，6/6 章全中）：课程主页 studentstudy 的章节侧边栏会被
+    // 兜底启发式捞进来 —— 它以「1.1」开头、内部有章节搜索框 <input>，
+    // 于是被判成一道题，题干是整份目录：
+    //   「行列式 1.1 第一周学习说明 1.2 引例 插值问题 1.3 n阶行列式 …」
+    //
+    // 判据用「题型证据」：角标 / 选项行 / 可点选项，三者至少有一条。
+    //
+    // ⚠️ 不能拿「有没有 <input>」当判据：真题在**回看态**下没有 input，
+    // 选项是纯文本行（实测第1题 type=single 选项=4 输入=false）。
+    // 早先那版用 input 判据，把 5 道真题全毙了，解析数 5 → 0。
+    const preOptions = Array.from(
+      el.querySelectorAll(
+        'input[type="radio"],input[type="checkbox"],li[role="radio"],li[role="checkbox"],li.before-after,[role="radio"],[role="checkbox"]'
+      )
+    );
+    const preBadge = TYPE_BADGE.test(raw);
+    const preOptionLines = countOptionLines(raw);
+    if (!preBadge && preOptions.length < 2 && preOptionLines < 2) return;
     const full = clean(raw);
     const rawLines = raw.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
 
@@ -376,6 +397,15 @@ function extractInPage(): { questions: QuizQuestion[] } {
  */
 const QUIZ_FRAME_URL = /selectWorkQuestion|work\/work|VideoQuestion|ExamWork|\/(work|exam)\/(start|answer|question)/i;
 
+/**
+ * 明确不是测验的 frame。
+ *
+ * studentstudy 是课程主页：整页是章节侧边栏（目录里带「第一周作业」这类字样）
+ * 加一个章节搜索框。它的 innerText 必然命中 QUIZ_WORDS，且整份目录会被解析
+ * 成一道「题」。不排除掉的话，视频章节 100% 误判（线性代数实测 6/6）。
+ */
+const NON_QUIZ_FRAME_URL = /\/mycourse\/studentstudy|\/mycourse\/studentPage|\/studentstudy|\/mycourse\/(?!.*studentstudy)/i;
+
 export async function findQuizFrames(page: Page): Promise<Frame[]> {
   const out: Frame[] = [];
   for (const frame of page.frames()) {
@@ -383,6 +413,8 @@ export async function findQuizFrames(page: Page): Promise<Frame[]> {
       out.push(frame);
       continue;
     }
+    // 课程主页不是测验页，别让它进候选（见 NON_QUIZ_FRAME_URL 注释）
+    if (NON_QUIZ_FRAME_URL.test(frame.url())) continue;
     try {
       const hit = await frame.evaluate((words: string) => {
         const re = new RegExp(words);
@@ -891,13 +923,29 @@ export async function handleQuiz(
   return { answered, success, coverage: answeredRatio };
 }
 
+/**
+ * 一道解析结果到底算不算「这一页确实是测验」。
+ *
+ * 判定要严：宁可漏判（当成普通章节，走视频/文档流程），也不能误判——
+ * 误判会让视频章节跳去答题流程，弹到交卷框，用户看到的是「明明是视频」。
+ *
+ * 至少要有一道「像题」的：题型已知、有选项、或有可填输入。
+ * 单靠 qs.length 会被章节侧边栏骗过去（实测整份目录被当成 1 道题）。
+ */
+function isPlausibleQuestion(q: QuizQuestion): boolean {
+  if (q.type !== 'unknown') return true;
+  if (q.options && q.options.length >= 2) return true;
+  if (q.hasInput) return true;
+  return false;
+}
+
 /** 兼容旧调用 */
 export async function isQuizPage(page: Page): Promise<boolean> {
   if (await findQuizPopup(page)) return true;
   const frames = await findQuizFrames(page);
   for (const f of frames) {
     const qs = await extractQuestions(f).catch(() => [] as QuizQuestion[]);
-    if (qs.length) return true;
+    if (qs.some(isPlausibleQuestion)) return true;
   }
   return false;
 }
