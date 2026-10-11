@@ -76,6 +76,8 @@ export interface AppSettings {
   dataDir: string;
   /** 视频倍速：1 / 1.25 / 1.5 / 2 */
   videoSpeed: number;
+  /** 视频静音：默认开启，刷课时无需出声 */
+  muted: boolean;
   /** AI 答题总开关 */
   agentEnabled: boolean;
   /**
@@ -101,6 +103,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   startMinimized: false,
   dataDir: '',
   videoSpeed: 1,
+  muted: true,
   agentEnabled: false,
   answerPopup: false,
   submitCoverRate: 0.8,
