@@ -15,6 +15,8 @@ export interface EngineHooks {
   diag(tag: string): Promise<string | null>;
   /** 目标视频倍速（1 / 1.25 / 1.5 / 2） */
   speed(): number;
+  /** 视频是否静音（设置项，默认 true） */
+  muted(): boolean;
   /** AI 答题总开关（用户可控） */
   agentEnabled(): boolean;
   /** 多模态视觉服务配置；key 为空则 Agent 不接管 */

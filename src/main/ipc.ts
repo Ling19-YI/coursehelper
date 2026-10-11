@@ -39,6 +39,7 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
       emit,
       getDeepseekKey: () => store.settings.deepseekKey,
       getVideoSpeed: () => Number(store.settings.videoSpeed) || 1,
+      getMuted: () => store.settings.muted !== false,
       getAgentEnabled: () => !!store.settings.agentEnabled,
       getVision: () => ({
         baseUrl: store.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1',

@@ -24,6 +24,7 @@ export default function Settings() {
   const [dataDir, setDataDir] = useState('');
   const [speed, setSpeed] = useState<number>(1);
   const [agentOn, setAgentOn] = useState(false);
+  const [muted, setMuted] = useState(true);
   const [visionKey, setVisionKey] = useState('');
   const [visionBaseUrl, setVisionBaseUrl] = useState('https://tokendance.space/gateway/v1');
   const [visionModel, setVisionModel] = useState('mimo-v2.6-flash');
@@ -41,6 +42,7 @@ export default function Settings() {
       setVisionBaseUrl(a.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1');
       setVisionModel(a.settings.visionModel || 'mimo-v2.6-flash');
       setAgentOn(!!a.settings.agentEnabled);
+    setMuted(a.settings.muted !== false);
     }
     if (a.username) setUsername(a.username);
     window.ch.getVision().then(setVisionInfo).catch(() => {});
@@ -72,6 +74,7 @@ export default function Settings() {
         dataDir: dataDir.trim(),
         videoSpeed: speed,
         agentEnabled: agentOn,
+    muted,
         visionBaseUrl: visionBaseUrl.trim(),
         visionModel: visionModel.trim() || 'mimo-v2.6-flash',
       });
@@ -215,6 +218,20 @@ export default function Settings() {
             />
           </div>
         )}
+      </div>
+
+      <div className="cardish">
+        <b>视频静音</b>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          默认静音。刷课时无需出声，也避免多开任务时声音叠加。
+          关闭后视频会正常播放声音。
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Switch checked={muted} onChange={setMuted} />
+          <span style={{ fontSize: 13 }}>
+            {muted ? '静音播放' : '正常播放（有声）'}
+          </span>
+        </div>
       </div>
 
       <div className="cardish">

@@ -42,9 +42,9 @@ export async function setVideoRate(page: Page, rate: number): Promise<void> {
   }
 }
 
-/** 强制播放：读取视频状态，若暂停则 play()，并维持目标倍速 */
-export async function forcePlay(frame: Frame): Promise<VideoState | null> {
-  return await frame.evaluate(() => {
+/** 强制播放：读取视频状态，若暂停则 play()，并维持目标倍速与静音 */
+export async function forcePlay(frame: Frame, wantMuted = true): Promise<VideoState | null> {
+  return await frame.evaluate((mute) => {
     const v = document.querySelector('video') as HTMLVideoElement | null;
     if (!v) return null;
     let err = '';
@@ -54,6 +54,14 @@ export async function forcePlay(frame: Frame): Promise<VideoState | null> {
       const want = target > 1 ? target : 1;
       if (Math.abs(v.playbackRate - want) > 0.01) v.playbackRate = want;
     } catch {}
+    // 静音：每次都重新设置。平台在切换清晰度或音轨时会重置 muted，
+    // 只在初始化时设一次会被悄悄解除。
+    if (mute && !v.muted) {
+      try {
+        v.muted = true;
+        v.volume = 0;
+      } catch {}
+    }
     if (v.paused) {
       try {
         const p = v.play();
@@ -68,15 +76,37 @@ export async function forcePlay(frame: Frame): Promise<VideoState | null> {
       paused: v.paused,
       ended: v.ended,
       rate: v.playbackRate,
+      muted: v.muted,
       focus: document.hasFocus(),
       vis: document.visibilityState,
       err,
     };
-  });
+  }, wantMuted);
 }
 
 /** 唤醒：合成事件 + forcePlay + 兜底点击播放按钮 */
-export async function wakeUp(page: Page, frame: Frame): Promise<VideoState | null> {
+export async function wakeUp(page: Page, frame: Frame, wantMuted = true): Promise<VideoState | null> {
+  // 兜底：扫码/验证码弹窗期间绝不能派发事件或点击，
+  // 否则二维码会被判定环境变化而反复刷新。这里拦一道，
+  // 避免其他调用路径绕过 video.ts 的弹窗检测。
+  try {
+    const blocked = await frame.evaluate(() => {
+      const kw = /扫码|扫描二维码|手机.{0,4}确认|验证码|人脸|安全验证|身份验证/;
+      for (const el of Array.from(document.querySelectorAll(
+        '.layui-layer,.popDiv,.markPopup,.maskDiv,.modal,.ant-modal,.el-dialog,[class*="scanCode"],[class*="verify"]'
+      ))) {
+        const r = el.getBoundingClientRect();
+        if (r.width < 80 || r.height < 60) continue;
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+        const t = ((el as HTMLElement).innerText || el.textContent || '').trim();
+        if (t.length >= 4 && kw.test(t)) return true;
+      }
+      return false;
+    });
+    if (blocked) return null;
+  } catch {}
+
   try {
     await frame.evaluate(() => {
       window.dispatchEvent(new Event('focus'));
@@ -86,14 +116,14 @@ export async function wakeUp(page: Page, frame: Frame): Promise<VideoState | nul
     });
   } catch {}
   await new Promise(r => setTimeout(r, 800));
-  let s = await forcePlay(frame);
+  let s = await forcePlay(frame, wantMuted);
   if (s?.paused) {
     try {
       const v = await frame.$('video');
       if (v) await v.click({ force: true, timeout: 2000 });
     } catch {}
     await new Promise(r => setTimeout(r, 1200));
-    s = await forcePlay(frame);
+    s = await forcePlay(frame, wantMuted);
   }
   if (s?.paused) {
     for (const sel of ['.play-btn', '.prism-big-play-btn', '.vjs-big-play-button', '[class*="big-play"]', '[class*="playBtn"]']) {
@@ -102,7 +132,7 @@ export async function wakeUp(page: Page, frame: Frame): Promise<VideoState | nul
         if (b) {
           await b.click({ force: true, timeout: 1500 });
           await new Promise(r => setTimeout(r, 1000));
-          s = await forcePlay(frame);
+          s = await forcePlay(frame, wantMuted);
           if (s && !s.paused) break;
         }
       } catch {}
