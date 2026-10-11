@@ -152,9 +152,10 @@ function extractInPage(): { questions: QuizQuestion[] } {
   // 先清掉上一轮提取留下的标记。extractQuestions 会对多个 frame 各跑一遍，
   // 同一批 DOM 元素会被反复重写标记；不清的话会出现「某些题目的标记来自
   // 另一次提取、索引刚好对得上」的假象 —— 症状是点选时灵时不灵。
-  document.querySelectorAll('[data-qh],[data-qhf]').forEach(n => {
+  document.querySelectorAll('[data-qh],[data-qhf],[data-qh-root]').forEach(n => {
     n.removeAttribute('data-qh');
     n.removeAttribute('data-qhf');
+    n.removeAttribute('data-qh-root');
   });
 
   const questions: QuizQuestion[] = [];
@@ -347,6 +348,10 @@ function extractInPage(): { questions: QuizQuestion[] } {
         }
       }
     }
+    // 给题目根节点也打个标记：data-qh 只标在选项上（data-qh="1:A"），
+    // 截图识判要的是整道题（含标题与选项），靠索引定位不可靠，
+    // 这里打标记之后才能稳定截到对应的那个元素。
+    el.setAttribute('data-qh-root', String(qIdx));
 
     questions.push({
       index: qIdx,
@@ -733,7 +738,7 @@ export async function handleQuiz(
           page,
           channel: opts.visionChannel,
           frameFor: () => frame,
-          selectorFor: q => `[data-qh="${q.index}"]`,
+          selectorFor: q => `[data-qh-root="${q.index}"]`,
           log: (lv, m) => h.log(lv, m),
         });
         const got = await vs.invokeAll(encQs);
