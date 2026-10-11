@@ -24,6 +24,7 @@
 |---|---|---|
 | `main` | 主开发（chat） | 发布主干，所有发版基于此 |
 | `feat/multi-platform` | 另一 agent | 多平台支持（雨课堂），**开发中，勿动** |
+| `feat/quiz-answering` | 主开发（chat） | 答题链（章节测验 + 截图识题 + 随堂弹题），**已并入 v2.0.0**，分支保留 |
 
 ### 铁律
 
@@ -65,7 +66,8 @@ npm run dist        # 完整打包 → release/
 
 ### 测试脚本
 
-项目**没有测试框架**，验证逻辑用独立脚本，放在 `scripts/test-*.mjs`：
+项目**没有测试框架**，验证逻辑用独立脚本，放在 `scripts/test-*.mjs` 或
+`scripts/test-*.ts`：
 
 ```bash
 npx tsx scripts/test-timeout.mts          # 超时保护
@@ -74,7 +76,15 @@ node scripts/test-account-switch.mjs      # 换账号判定
 node scripts/test-channel.mjs             # AI 通道选择
 ```
 
-新增验证脚本时沿用 `test-*.mjs` 命名，**会被入库**。
+新增验证脚本时沿用 `test-*.mjs` / `test-*.ts` 命名，**会被入库**。
+
+答题相关有两套，改动后必跑：
+
+```bash
+npm test          # typecheck + 下面两个
+npm run test:answer   # 答案链、题库归一化、AI 不猜
+npm run test:vision   # 截图识题的答案解析与越界丢弃
+```
 
 ### 发布前检查（必跑）
 
@@ -260,13 +270,33 @@ node scripts/local-preflight.mjs 1.6.0
 
 ---
 
-## 九、当前状态（2026-10-10）
+## 九、当前状态（2026-10-11）
 
-- 最新发布：**v1.5.1**
-- `main` 已包含：双源更新、视频不检测随堂题、换账号修复、收款码更新
+- 最新发布：**v2.0.0**
+- `feat/quiz-answering` 已并入 `main`（fast-forward），该分支保留未删
+- `main` 已包含：
+  - **章节测验 AI 答题**：纯文本答案链 + 本地题库沉淀 + 交卷覆盖率闸门
+  - **截图识题**：图片题干 / 超星字体替换（`font-cxsecret`）两条只能看渲染画面的路
+  - **视频随堂弹题**：按真实 DOM 契约实现，设置项 `answerPopup` 默认**关闭**
+  - 视频静音开关、扫码/验证码/人脸弹窗检测（命中即停所有模拟动作）
+  - 双源更新、换账号修复、收款码更新
 - `feat/multi-platform` 开发中：PlatformDriver 契约、多平台命名空间
-- AI 答题默认**关闭**，用户需自行配置多模态 Key
+- **多模态 Key 由用户自填**，只要求支持 OpenAI 兼容的 `chat/completions` +
+  `image_url`（实测 mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v /
+  glm-5v-turbo 可用）。纯文本模型不吃图，会返回空答案而不是报错
 - 已知限制：各校题目结构差异大，答题准确率无法保证
+
+### 超星页面形态的坑（改 quiz.ts / blocker.ts 前必读）
+
+关键词匹配一定要配结构判据，否则会大面积误判。已踩过两次：
+
+1. 课程主页 `studentstudy` 的章节侧边栏目录含「作业」「待完成」等字样，
+   整页文本匹配会把视频章节判成测验 → 见 `NON_QUIZ_FRAME_URL`、
+   `isPlausibleQuestion`
+2. 页面里藏着 `display:none` 的弹窗模板，里面有「扫码」二字。取整页文本时
+   **必须用真实 `body.innerText`**，`cloneNode` 出来的游离节点会让 innerText
+   退化成 textContent，把隐藏内容全算进去（实测 715 字 → 99987 字）→ 见
+   `blocker.ts` 第 2 步注释
 
 ---
 
