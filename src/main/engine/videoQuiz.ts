@@ -67,15 +67,21 @@ export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
             return 'open';
           };
 
-          const q = (e: Element | null) => (e ? (e.textContent || '').replace(/\\s+/g, ' ').trim() : '');
+          const q = (e: Element | null) => (e ? (e.textContent || '').replace(/\s+/g, ' ').trim() : '');
           // 题干：排除选项行之后剩下的文字
           const optTexts = opts.map(o => q(o));
           let stem = q(root);
           for (const t of optTexts) if (t) stem = stem.replace(t, ' ');
+          // 隐藏的反馈元素也在 root 里，不剔就会混进题干。真机实测（基础英语读写 3.2）
+          // 抽出来原本是：「……will be great. 提交提交中继续回答正确回答错误回答错误，回看  分钟」
           stem = stem
-            .replace(/\\s*\\d+(\\.\\d+)?\\s*分\\s*/g, ' ')
-            .replace(/[\\[\\]【】（）()]/g, ' ')
-            .replace(/\\s+/g, ' ')
+            .replace(/(提交中|回答正确|回答错误|继续|回看|提交)+/g, ' ')
+            .replace(/\s*\d+(\.\d+)?\s*分\s*钟?/g, ' ')
+            .replace(/\s*\d+(\.\d+)?\s*分(?!钟)/g, ' ')
+            // 倒计时秒数为 0 时只剩一个「， 分钟」，正则带不上数字，单独清
+            .replace(/[，,、;；]?\s*分钟?/g, ' ')
+            .replace(/[\[\]【】（）()]/g, ' ')
+            .replace(/\s+/g, ' ')
             .trim()
             .slice(0, 300);
 
@@ -99,7 +105,7 @@ export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
             const raw = q(o);
             return {
               label: String.fromCharCode(65 + i),
-              text: raw.replace(new RegExp('^\\\\s*' + String.fromCharCode(65 + i) + '\\\\s*[\\\\.\\\\u3001]?\\\\s*'), '').slice(0, 120),
+              text: raw.replace(new RegExp('^\\s*' + String.fromCharCode(65 + i) + '\\s*[.、．)]?\\s*'), '').slice(0, 120),
             };
           });
 
@@ -137,17 +143,20 @@ async function waitFeedback(
   page: Page,
   h: EngineHooks,
   opts: { submitTimeout: number }
-): Promise<VideoPopupFeedback> {
+): Promise<{ fb: VideoPopupFeedback; gone: boolean }> {
   const deadline = Date.now() + opts.submitTimeout;
   let last: VideoPopupFeedback = 'open';
   while (Date.now() < deadline) {
     h.ctl.throwIfStopped();
     const s = await readVideoPopup(page);
     last = s.feedback;
-    if (s.feedback !== 'open' && s.feedback !== 'submitting') return s.feedback;
+    if (s.feedback !== 'open' && s.feedback !== 'submitting') return { fb: s.feedback, gone: false };
+    // 弹题整个消失了：答对时超星直接收起弹题继续播放，不给任何反馈。
+    // 这也是成功，不能当成「无反馈」——真机实测基础英语读写 3.2 就是这样。
+    if (!s.present) return { fb: 'correct', gone: true };
     await h.ctl.sleep(600);
   }
-  return last;
+  return { fb: last, gone: false };
 }
 
 const FB_TEXT: Record<VideoPopupFeedback, string> = {
@@ -221,8 +230,9 @@ export async function answerVideoPopup(
     return { answered: clicked, submitted: 0, retried: 0 };
   }
 
-  let fb = await waitFeedback(page, h, { submitTimeout });
-  h.log('info', `    → 弹题反馈: ${FB_TEXT[fb]}`);
+  let w = await waitFeedback(page, h, { submitTimeout });
+  let fb = w.fb;
+  h.log('info', `    → 弹题反馈: ${FB_TEXT[fb]}${w.gone ? '（弹题已收起，平台未显示反馈）' : ''}`);
   let submitted = 1;
   let retried = 0;
 
@@ -248,8 +258,9 @@ export async function answerVideoPopup(
         return { answered: clicked, submitted: 0, retried };
       }
       await first.frame!.locator('#videoquiz-submit').first().click({ force: true, timeout: 3000 }).catch(() => {});
-      fb = await waitFeedback(page, h, { submitTimeout });
-      h.log(fb === 'correct' ? 'ok' : 'warn', `    → 改选后: ${FB_TEXT[fb]}`);
+      w = await waitFeedback(page, h, { submitTimeout });
+      fb = w.fb;
+      h.log(fb === 'correct' ? 'ok' : 'warn', `    → 改选后: ${FB_TEXT[fb]}${w.gone ? '（弹题已收起）' : ''}`);
       submitted = fb === 'correct' ? 2 : 1;
     } catch (e: any) {
       h.log('warn', `    ⚠ 改选异常: ${String(e.message).slice(0, 60)}`);
