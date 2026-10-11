@@ -618,40 +618,53 @@ export async function submitQuizIn(
   h.log('info', `    → 已点提交，等待确认框`);
 
   // -- 第二步：点确认框里的确认按钮 -----------------------------------
-  // 超星真实结构（线性代数真机实测）：
-  //   #workpop(.maskDiv) > .popDiv.wid440.Marking
-  //     <a id="popok" class="jb_btn jb_btn_92">提交</a>   ← 确认
-  //     <a id="popno" class="btnBlue btn_92_cancel">取消</a>
+  // 超星真实存在**两套**确认框，都实测/实测过，必须都覆盖：
   //
-  // 两个坑：
-  //  1. 这个框在**第三个 frame** 里（外层课程页 openc=...），既不是测验 frame
-  //     也不是主页面。必须在 page.frames() 里全找。
-  //  2. 按钮是 <a> 不是 <button>，且取消和提交长得一模一样。按位置或 nth 猜
-  //     会点到取消，等于白跑一趟还可能丢掉已填的卷。
-  const isConfirm = (t: string | null) => !!t && /^(提交|确定|确认|交卷|完成|是|OK)$/.test(t.trim());
+  //  (a) 带提交次数校验的那套：
+  //        #confirmSubWin[role=alertdialog] > a.bluebtn[onclick*=submitCheckTimes]
+  //      提交前会拦一道次数检查，选器极严格，不会误伤页面上其它同名按钮。
+  //
+  //  (b) 通用弹窗那套（线性代数 2.5 真机）：
+  //        #workpop(.maskDiv) > .popDiv.wid440.Marking
+  //          <a id="popok">提交</a> / <a id="popno">取消</a>
+  //
+  // 坑：确认框在**第三个 frame**（外层课程页 openc=...），既不是测验 frame
+  // 也不是主页面；按钮是 <a> 不是 <button>；取消和提交长得一模一样。
+  // 按位置或 nth 猜会点到取消，等于白跑一趟还可能丢掉已填的卷。
+
+  // 按精确度从高到低，前两个命中就直接用，都不中才退回按文字匹配
+  const EXACT = [
+    '#confirmSubWin[role="alertdialog"] a.bluebtn[onclick*="submitCheckTimes"]',
+    '#popok',
+  ];
 
   const deadline = Date.now() + 20000;
   let confirmed = false;
+  let how = '';
   while (Date.now() < deadline && !confirmed) {
     h.ctl.throwIfStopped();
     for (const root of page.frames()) {
       if (confirmed) break;
-      // 先按已知 id 直取，最稳
-      const popok = root.locator('#popok');
-      if ((await popok.count().catch(() => 0)) && (await popok.first().isVisible().catch(() => false))) {
-        await popok.first().click({ force: true, timeout: 2500 }).catch(() => {});
+      for (const sel of EXACT) {
+        const el = root.locator(sel);
+        if (!(await el.count().catch(() => 0))) continue;
+        if (!(await el.first().isVisible().catch(() => false))) continue;
+        await el.first().click({ force: true, timeout: 2500 }).catch(() => {});
         confirmed = true;
+        how = sel;
         break;
       }
-      // 再退回按文字匹配（别的章节可能有不同皮肤）
+      if (confirmed) break;
+      // 兜底：按文字匹配（其它章节可能有第三种皮肤）
       const btns2 = root.locator('.popBottom a, .popDiv a, .layui-layer a, .layui-layer button, button');
       const m = await btns2.count().catch(() => 0);
       for (let j = m - 1; j >= 0; j--) {
         const txt = await btns2.nth(j).innerText().catch(() => null);
-        if (!isConfirm(txt)) continue;
+        if (!txt || !/^(提交|确定|确认|交卷|完成|是|OK)$/.test(txt.trim())) continue;
         if (!(await btns2.nth(j).isVisible().catch(() => false))) continue;
         await btns2.nth(j).click({ force: true, timeout: 2500 }).catch(() => {});
         confirmed = true;
+        how = `text:"${txt.trim()}"`;
         break;
       }
     }
@@ -661,22 +674,46 @@ export async function submitQuizIn(
     h.log('warn', `    x ${label}：确认框未出现或点不到，**未提交**`);
     return false;
   }
+  h.log('info', `    → 已确认（${how}），等待平台完成标记`);
+  if (!confirmed) {
+    h.log('warn', `    x ${label}：确认框未出现或点不到，**未提交**`);
+    return false;
+  }
 
   // -- 第三步：验证真的提交了 -----------------------------------------
   // 点到按钮 ≠ 提交成功。只有页面出现结果标记才算数。
   // 真机踩过：旧实现点完就 return true，日志写「成功」，成绩纹丝不动。
-  const DONE = /提交成功|已提交|已完成|你的得分|得分[:：\s]|正确率|查看结果|作业已/;
+  // 判定必须**强**。第一版用了 /得分|已完成|…/ 这种宽匹配，结果在超星页面里
+// 匹配到了无关文本，把「根本没交上去」判成了成功 —— 又一次假成功。
+  // 证据只有两种，且都要能定位到具体位置：
+  //   (a) 明确的成功文案
+  //   (b) 「我的答案 …… N 分」这种带分数的结果块（必须同一个元素内相邻）
+  const DONE_TEXT = /提交成功|交卷成功|作业已提交|恭喜.{0,12}(提交|完成)/;
+  const doneHit = async (root: Frame | Page): Promise<string> => {
+    const body = await root
+      .locator('body')
+      .first()
+      .innerText()
+      .catch(() => '');
+    if (DONE_TEXT.test(body)) return `文案:${DONE_TEXT.exec(body)?.[0]}`;
+    // 逐题结果块：元素文本里同时有「我的答案」和「N 分」
+    const blocks = root.locator('div,li,tr,section');
+    const n = await blocks.count().catch(() => 0);
+    for (let i = 0; i < Math.min(n, 400); i++) {
+      const t = await blocks.nth(i).innerText().catch(() => '');
+      if (!t || t.length > 200) continue;
+      if (/我的答案/.test(t) && /\d+(\.\d+)?\s*分/.test(t)) return `结果块:${t.replace(/\s+/g, ' ').slice(0, 40)}`;
+    }
+    return '';
+  };
+
   const end = Date.now() + 25000;
   while (Date.now() < end) {
     h.ctl.throwIfStopped();
     for (const root of page.frames()) {
-      const txt = await root
-        .locator('body')
-        .first()
-        .innerText()
-        .catch(() => '');
-      if (DONE.test(txt)) {
-        h.log('ok', `    ✓ ${label}（已验证页面出现结果标记）`);
+      const hit = await doneHit(root);
+      if (hit) {
+        h.log('ok', `    ✓ ${label}（证据：${hit}）`);
         return true;
       }
     }
