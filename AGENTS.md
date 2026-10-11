@@ -14,44 +14,69 @@
 
 ---
 
-## 二、分支纪律（最重要）
+## 二、分支与协作纪律（最重要）
 
-本仓库由**多个 agent 并行开发**，动分支前必须确认。
+本仓库由**多个 agent 并行开发**。已发生的两次协作事故都在这一节，
+动手前请读完。
 
-### 当前分支布局
+### 分支布局
 
-| 分支 | 负责人 | 说明 |
-|---|---|---|
-| `main` | 主开发（chat） | 发布主干，所有发版基于此 |
-| `feat/multi-platform` | 另一 agent | 多平台支持（雨课堂），**开发中，勿动** |
-| `feat/quiz-answering` | 主开发（chat） | 答题链（章节测验 + 截图识题 + 随堂弹题），**已并入 v2.0.0**，分支保留 |
+| 分支 | 说明 |
+|---|---|
+| `main` | **双方共享的发布主干**。任何人都在这里提交，不存在"谁的分支" |
+| `feat/multi-platform` | 多平台支持（雨课堂），开发中，**勿动** |
+| `feat/quiz-answering` | 答题链，**已并入 v2.0.0**，分支保留备用 |
 
 ### 铁律
 
-1. **提交前必须确认当前分支**
+1. **动手前先同步，别凭上一次的认知开工**
 
    ```bash
+   git fetch --all
+   git log --oneline -10 origin/main
    git branch --show-current
    ```
 
-2. **只在 `main` 上提交，除非明确要求切分支**
+2. **只在 `main` 上提交**（除非明确要求切分支）
 
-   ```bash
-   git checkout main
-   ```
-
-3. **不要往别人的开发分支提交任何东西**（哪怕只是加文档）
+3. **不要往别人的 feat/* 分支提交任何东西**（哪怕只是加文档）
 
 4. **不要合并、不要 rebase 他人的分支**，等对方主动提出
 
-5. 动别人的分支前先备份：
+5. **发布前必须确认本次要发的提交**
+
+   ```bash
+   git log --oneline <上次发布tag>..HEAD
+   ```
+
+   别凭记忆说"这次只有我修的几条"——`main` 上可能已并入别人的大量工作。
+
+6. 动别人的分支前先备份：
    ```bash
    git branch backup-<branch>-before-change
    ```
 
-> 真实事故记录：曾在 `feat/multi-platform` 上误提交文档，用
-> `git reset --hard HEAD~1` + 重新提交到 main 修正。
-> 养成先查分支的习惯。
+### 共享模块要格外小心
+
+以下文件双方都可能改，编辑前先看最近谁动过、是不是有正在进行的工作：
+
+| 文件 | 风险 |
+|---|---|
+| `src/main/engine/quiz.ts` | 双方都改过，已重构多次 |
+| `src/main/engine/video.ts` | 视频逻辑，改动互相影响 |
+| `src/main/engine/blocker.ts` | 人工介入检测，误判会卡死整节课 |
+| `AGENTS.md` | 双方都在维护，注意别覆盖对方的更新 |
+
+改这几个文件前建议先 `git log -3 -- <文件>` 看近期改动。
+**第九章「超星页面形态的坑」是改 quiz.ts / blocker.ts 前必读。**
+
+> **事故一（分支）**：曾在 `feat/multi-platform` 上误提交文档。
+> 用 `git reset --hard HEAD~1` + 重新提交到 main 修正。
+>
+> **事故二（认知过期）**：v2.0.0 发布前，我依据旧的认知认为
+> 「2.0 只有六个 bug 修复」，还去问用户 2.0 该包含什么——
+> 而当时 `git log` 里已经躺着另一个 agent 合并的整套答题重构
+> （约 2100 行）。**答案在仓库里，别问人，先看 log。**
 
 ---
 
@@ -89,7 +114,7 @@ npm run test:vision   # 截图识题的答案解析与越界丢弃
 ### 发布前检查（必跑）
 
 ```bash
-node scripts/local-preflight.mjs 1.5.1
+node scripts/local-preflight.mjs 2.0.0
 ```
 
 检查 `latest.yml` 编码、asar 内容、密钥泄漏、构建产物完整性。
@@ -230,16 +255,16 @@ https://gitcode.com/2603_95808828/coursehelp/-/releases
 node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='1.6.0';fs.writeFileSync('package.json',JSON.stringify(p,null,2),'utf8')"
 
 # 2. 提交并打 tag（两个远程都要推）
-git commit -am "chore(release): v1.6.0"
-git tag v1.6.0
+git commit -am "chore(release): v2.0.0"
+git tag v2.0.0
 git push origin main && git push gitcode main
-git push origin v1.6.0 && git push gitcode --tags
+git push origin v2.0.0 && git push gitcode --tags
 
 # 3. 构建
 npm run dist
 
 # 4. 发布前检查（必跑）
-node scripts/local-preflight.mjs 1.6.0
+node scripts/local-preflight.mjs 2.0.0
 
 # 5. 上传（见 scripts/local-release.mjs，gitignored）
 ```
@@ -302,8 +327,10 @@ node scripts/local-preflight.mjs 1.6.0
 
 ## 十、给 agent 的最后叮嘱
 
-1. **先查分支，再动手**
-2. **改配置用 Node，不用 PowerShell 的 `Set-Content`**
-3. **改完跑 `npm run typecheck`**
-4. **发布前跑 preflight**
-5. **不确定就问，不要猜着改**——尤其是账号、答题、发布相关的逻辑
+1. **先 `git fetch` + 看 `git log`，再动手**——`main` 是共享主干
+2. **发布前用 `git log <上tag>..HEAD` 确认发的是什么**，别凭记忆
+3. **先查分支，再提交**
+4. **改配置用 Node，不用 PowerShell 的 `Set-Content`**
+5. **改完跑 `npm run typecheck`**
+6. **发布前跑 preflight**
+7. **不确定就问，不要猜着改**——尤其是账号、答题、发布相关的逻辑
