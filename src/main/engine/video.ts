@@ -1,6 +1,6 @@
 ﻿import type { Page } from 'playwright';
 import { forcePlay, wakeUp, installPauseSpy, setVideoRate } from './keepalive';
-import { handleQuizPopup } from './quiz';
+import { answerVideoPopup } from './videoQuiz';
 import type { EngineHooks } from './hooks';
 
 export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
@@ -97,27 +97,30 @@ export async function waitForVideoEnd(page: Page, h: EngineHooks): Promise<Video
       lastUrl = currentUrl;
     }
 
-    // 视频播放期间的随堂题弹窗。
-    //
-    // 默认关闭：平台弹窗出现时视频往往已经暂停，此时自动点选会让「卡住」与
-    // 「该答题」两种状态混在一起，且部分课程老师会刻意用弹窗当 Attendance。
-    // 用户可在设置里单独打开；打开后每轮最多处理一次，避免反复探测。
     let popupHandledThisVideo = false;
+
+    // 视频播放期间的随堂弹题。
+    //
+    // 判定依据是 #videoquiz-submit 这个提交按钮，而不是「页面上有没有弹窗容器」——
+    // 超星页面上常驻一堆空弹窗容器（#workpop / #hintPop 等），按容器判断会一直误报。
+    //
+    // 默认关闭：设置项 answerPopup。平台把弹题当考勤手段的课程不在此列。
     if (h.answerPopup() && !popupHandledThisVideo) {
       try {
-        const r = await handleQuizPopup(page, h, h.deepseekKey(), h.visionChannel(), {
+        const r = await answerVideoPopup(page, h, h.visionChannel(), {
           tiku: h.tiku(),
           submitCoverRate: h.submitCoverRate(),
         });
-        if (r.popups) {
+        if (r) {
           popupHandledThisVideo = true;
-          h.log('ok', `    ✓ 随堂弹窗已处理（${r.popups} 个，答 ${r.answered} 题，提交 ${r.submitted} 次）`);
+          h.log(
+            'ok',
+            `    ✓ 随堂弹题已处理（点选 ${r.answered}，提交 ${r.submitted}${r.retried ? `，改选 ${r.retried}` : ''}）`
+          );
         }
       } catch (e) {
         rethrowIfStopped(h, e);
-        const msg = String((e as any)?.message || e);
-        // 弹窗答题失败不该毁掉整个视频任务
-        h.log('warn', `    ⚠ 随堂弹窗处理失败：${msg}`);
+        h.log('warn', `    ⚠ 随堂弹题处理失败：${String((e as any)?.message || e).slice(0, 70)}`);
       }
     }
 

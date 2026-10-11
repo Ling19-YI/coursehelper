@@ -16,11 +16,9 @@ const SUBMIT_WORDS = /提交|确定|确认|交卷|完成/;
 const POPUP_SELECTORS = [
   '#divVideoQuestion',
   '#divExamWork',
-  // 实测页面上存在这三个超星弹窗容器，原先一个都没覆盖，导致随堂弹窗永远发现不了
-  '#workpop',
-  '#hintPop',
-  '.popDiv.wid440',
-  '.popDiv.wid840',
+  // 不要把 '#workpop' / '#hintPop' / '.popDiv' 加进来：这些容器在超星页面上是常驻的，
+  // 页面一打开就存在（内容只有「提示」），按它们判断会永远误报。
+  // 视频随堂弹题另有一套契约，见 videoQuiz.ts。
   '.layui-layer',
   '.layui-dialog',
   '[role="dialog"]',
@@ -106,6 +104,15 @@ function extractInPage(): { questions: QuizQuestion[] } {
     } catch {
       continue;
     }
+
+  // 包含关系去重。超星的结构是
+  //   <div id="question404390558" class="singleQuesId"><div class="TiMu newTiMu">…</div></div>
+  // 外层命中 [id^=question]、内层命中 .TiMu，是两个不同元素，seen 去不了重。
+  // 不去重会有两个后果：每道题被数两遍；后一轮写 data-qh 时覆盖前一轮的索引，
+  // 于是靠前的那一半题目 applyAnswers 找不到标记、静默点不动。只保留最外层。
+  const outermost = picked.filter(el => !picked.some(o => o !== el && o.contains(el)));
+  picked.length = 0;
+  picked.push(...outermost);
     for (const el of els) {
       const t = clean(el.innerText || el.textContent || '');
       // 显式命中 .TiMu 之类的题目容器时不做长度上限：含 MathML/公式的题
@@ -141,8 +148,17 @@ function extractInPage(): { questions: QuizQuestion[] } {
     picked.push(...(inner.length ? inner : cand.slice(0, 30)));
   }
 
+  // 先清掉上一轮提取留下的标记。extractQuestions 会对多个 frame 各跑一遍，
+  // 同一批 DOM 元素会被反复重写标记；不清的话会出现「某些题目的标记来自
+  // 另一次提取、索引刚好对得上」的假象 —— 症状是点选时灵时不灵。
+  document.querySelectorAll('[data-qh],[data-qhf]').forEach(n => {
+    n.removeAttribute('data-qh');
+    n.removeAttribute('data-qhf');
+  });
+
   const questions: QuizQuestion[] = [];
   picked.slice(0, 60).forEach((el, qi) => {
+    const qIdx = qi + 1;
     const raw = el.innerText || el.textContent || '';
     const full = clean(raw);
     const rawLines = raw.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean);
@@ -210,7 +226,7 @@ function extractInPage(): { questions: QuizQuestion[] } {
     if (optionEls.length >= 2) {
       optionEls.slice(0, 8).forEach((oe, oi) => {
         const label = String.fromCharCode(65 + oi);
-        oe.setAttribute('data-qh', qi + ':' + label);
+        oe.setAttribute('data-qh', qIdx + ':' + label);
         const text = clean(oe.innerText || oe.textContent || '')
           .replace(new RegExp('^' + label + '\\s*[\\.\\u3001\\uff0e,)）:\\uff1a]?\\s*'), '')
           .slice(0, 200);
@@ -230,7 +246,7 @@ function extractInPage(): { questions: QuizQuestion[] } {
     const fillInputs = Array.from(
       el.querySelectorAll('input[type="text"],input:not([type]),textarea')
     ) as HTMLInputElement[];
-    fillInputs.forEach((inp, fi) => inp.setAttribute('data-qhf', String(qi) + ':' + fi));
+    fillInputs.forEach((inp, fi) => inp.setAttribute('data-qhf', String(qIdx) + ':' + fi));
 
     // ── 题干 ────────────────────────────────────────────────────────
     // 实测 .Zy_TItle 里混着三样东西：题号 <i class="fl">1</i>、题型角标
@@ -293,7 +309,7 @@ function extractInPage(): { questions: QuizQuestion[] } {
     }
 
     questions.push({
-      index: qi + 1,
+      index: qIdx,
       stem: stem || ('\u7b2c' + (qi + 1) + '\u9898'),
       type,
       options,
@@ -689,99 +705,6 @@ export async function handleQuiz(
     answered > 0 && (await submitQuizIn(page, frame, undefined, h, '\u5df2\u63d0\u4ea4\u7ae0\u8282\u4f5c\u4e1a'));
   if (!answered) h.log('warn', '    \u26a0 \u4e00\u9898\u672a\u70b9\u5230');
   return { answered, success, coverage: answeredRatio };
-}
-
-/**
- * 视频中途随堂弹窗答题：可连续处理多个弹窗。
- *
- * 与 handleQuiz 共用同一条答案链和覆盖率闸门 —— 弹窗同样不该「猜」。
- * 单个弹窗答不全时按选项闸门处理：默认不提交，关掉它让视频继续，
- * 总比提交一份确定错误的答案强。
- */
-export async function handleQuizPopup(
-  page: Page,
-  h: EngineHooks,
-  apiKey: string | undefined,
-  channel?: AnswerChannel | null,
-  opts?: QuizOptions
-): Promise<{ answered: number; popups: number; submitted: number }> {
-  const options = opts ?? {};
-  const store = options.tiku ?? null;
-  let answered = 0;
-  let popups = 0;
-  let submitted = 0;
-
-  const ch: AnswerChannel | null = channel
-    ? channel
-    : apiKey
-      ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
-      : null;
-  if (!ch?.apiKey) return { answered, popups, submitted };
-
-  for (let round = 0; round < 6; round++) {
-    h.ctl.throwIfStopped();
-    const popup = await findQuizPopup(page);
-    if (!popup) break;
-
-    const questions = await extractQuestions(popup.frame, popup.selector).catch(() => [] as QuizQuestion[]);
-    if (!questions.length) {
-      h.log('warn', '    \u26a0 \u5f39\u7a97\u5185\u672a\u89e3\u6790\u51fa\u9898\u76ee');
-      break;
-    }
-    popups++;
-
-    // 同一套优先级：页面已给出 > 本地题库 > AI
-    const answers = new Map<number, string>();
-    for (const q of questions) if (q.revealed) answers.set(q.index, q.revealed);
-    const pending = questions.filter(q => !answers.has(q.index));
-    const chain: Searcher[] = [];
-    if (store) chain.push(new CacheSearcher(store));
-    chain.push(new LlmSearcher(ch));
-    const got = await resolveAnswers(pending, chain);
-    for (const [k, v] of got) answers.set(k, v);
-
-    const ratio = questions.length ? answers.size / questions.length : 0;
-    const gate = options.submitCoverRate ?? DEFAULT_SUBMIT_COVER_RATE;
-    h.log(
-      'info',
-      `    \u2192 \u968f\u5802\u7ec3\u4e60\u5f39\u7a97\uff08${questions.length} \u9898\uff0c\u8986\u76d6 ${Math.round(ratio * 100)}%\uff09`
-    );
-    if (gate > 0 && ratio < gate) {
-      h.log(
-        'warn',
-        `    \u26a0 \u5f39\u7a97\u8986\u76d6\u7387\u4e0d\u8db3\uff08${Math.round(ratio * 100)}% < ${Math.round(gate * 100)}%\uff09\uff0c\u4e0d\u63d0\u4ea4\uff0c\u4ec0\u4e48\u90fd\u4e0d\u70b9`
-      );
-      break;
-    }
-
-    try {
-      const payload = [...answers.entries()].map(([i, answer]) => ({ i, answer }));
-      answered += await applyAnswers(page, popup.frame, questions, payload, popup.selector, h);
-      if (store) {
-        for (const [i, a] of answers) store.put(questions.find(q => q.index === i)?.stem ?? '', a);
-      }
-    } catch (e: any) {
-      h.log('error', `    \u2717 \u5f39\u7a97\u7b54\u9898: ${e.message}`);
-      break;
-    }
-
-    const ok = await submitQuizIn(page, popup.frame, popup.selector, h, '\u5f39\u7a97\u5df2\u63d0\u4ea4');
-    if (!ok) break;
-    submitted++;
-    await h.ctl.sleep(800);
-    // 关闭后确认弹窗真的消失，否则会对着同一个弹窗重复提交
-    let gone = false;
-    for (let k = 0; k < 8; k++) {
-      await h.ctl.sleep(500);
-      if (!(await findQuizPopup(page))) {
-        gone = true;
-        break;
-      }
-    }
-    if (!gone) break;
-    h.log('ok', '    \u2713 \u5f39\u7a97\u5173\u95ed\uff0c\u7ee7\u7eed\u64ad\u653e\u89c6\u9891');
-  }
-  return { answered, popups, submitted };
 }
 
 /** 兼容旧调用 */
