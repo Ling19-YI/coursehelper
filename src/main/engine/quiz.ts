@@ -268,6 +268,45 @@ function extractInPage(): { questions: QuizQuestion[] } {
     }
     stem = clean(stem).replace(/^\s*\d{1,3}\s*[\.\u3001\uff0e,)）:\uff1a\u3010\[\s]*/, '').slice(0, 400);
 
+    // -- needsVision: the two cases where the stem cannot be read from the DOM --
+    //
+    // Chaoxing has two distinct "can't read the stem" cases. Both can ONLY be
+    // solved by screenshotting the rendered page:
+    //
+    //  (1) The stem is an image. Measured on Linear Algebra week 4 Q1/Q3/Q4:
+    //        <div class="clearfix font-cxsecret fontLabel">
+    //          <span class="newZy_TItle">[single choice]</span>
+    //          <p><img src="http://p.ananas.chaoxing.com/star3/origin/....jpg"></p>
+    //        </div>
+    //      There is no text in the page at all; innerText only yields the badge.
+    //
+    //  (2) Font substitution. Measured on Linear Algebra week 5: the DOM holds
+    //      "矩阵"-style lookalikes while the page ships a custom font that
+    //      renders the correct glyphs. DOM text is permanently wrong here;
+    //      only a screenshot gets it right.
+    //
+    // Do NOT treat font-cxsecret alone as proof: Basic English Reading
+    // questions carry that class too, yet their text is perfectly readable
+    // (Latin letters are not substituted). A class-only rule throws away
+    // every question that works.
+    const cxClass =
+      String(el.className || '').includes('font-cxsecret') || !!el.querySelector('.font-cxsecret');
+
+    // (1) an <img> inside the title area is deterministic -- no guessing needed
+    const titleHasImg = Boolean(
+      (titleEl && titleEl.querySelector('img')) ||
+        (badgeEl && badgeEl.parentElement && badgeEl.parentElement.querySelector('img'))
+    );
+
+    // (2) font substitution: the tell is that substituted glyphs are obscure CJK
+    //     characters, while the surrounding text stays ordinary
+    const RARE_CJK = /[\u9012\u9041\u53c9\u53be\u5b64\u5b62\u5422\u55df\u550d\u5514\u5512\u5513\u535f\u5419\u5414\u5418\u5407\u5430\u542a\u73e2\u6c65\u5994\u5406\u5405\u9013\u9014\u9015\u9042\u9043\u9047\u9239\u9238]|(?<=[\u77e9\u9636\u65b9])[\u9041\u53c9\u53be\u5b64\u5b62\u5422]/;
+    const pua = /[\uE000-\uF8FF]/.test(stem);
+    const stemSubstituted = RARE_CJK.test(stem);
+
+    const encrypted = titleHasImg || pua || (cxClass && stemSubstituted);
+    if (encrypted) stem = '';
+
     // ── 页面已透露的答案 ───────────────────────────────────────────
     // 仅取「已勾选」和「正确项 class」两种硬标记。
     // 回看态的「我的答案：X」是学生当初选的，不是正确答案，不能当答案用。
@@ -315,6 +354,7 @@ function extractInPage(): { questions: QuizQuestion[] } {
       options,
       hasInput: fillInputs.length > 0,
       revealed,
+      encrypted,
     });
   });
 
@@ -642,7 +682,16 @@ export async function handleQuiz(
   );
 
   // ─\u2500\u2500 第 2/3 级：本地题库 \u2192 AI ──────────────────────────────────
-  if (pending.length) {
+  // 字体加密题（超星 .font-cxsecret）不进文字链：题干已被置空，
+  // 发给模型只会编答案，还会把乱码沉淀进题库污染后续命中。
+  // 留空让覆盖率闸门拦下交卷，比乱猜安全。
+  const plain = pending.filter(q => !q.encrypted);
+  const encCount = pending.length - plain.length;
+  if (encCount) {
+    h.log('warn', `    ⚠ ${encCount} 题题干为加密字体（超星 font-cxsecret），文字搜题无法处理，已留空`);
+  }
+
+  if (plain.length) {
     const chain: Searcher[] = [];
     if (store) chain.push(new CacheSearcher(store));
 
@@ -660,7 +709,7 @@ export async function handleQuiz(
     if (!chain.length) {
       h.log('warn', '    \u26a0 \u6ca1\u6709\u53ef\u7528\u641c\u9898\u5668\uff0c\u5168\u90e8\u7559\u7a7a');
     } else {
-      const got = await resolveAnswers(pending, chain, q =>
+      const got = await resolveAnswers(plain, chain, q =>
         h.log('info', `      Q${q.index} \u65e0\u89e3\uff0c\u7559\u7a7a`)
       );
       for (const [k, v] of got) answers.set(k, v);

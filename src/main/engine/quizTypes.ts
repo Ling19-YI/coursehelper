@@ -25,6 +25,14 @@ export interface QuizQuestion {
    * 既准确又省掉一次模型调用。解析不到就是 undefined。
    */
   revealed?: string;
+  /**
+   * 题干/选项被超星的字体加密（.font-cxsecret）糊掉了。
+   *
+   * 实测：这类题 innerText 取出来是「行列嘫」「鰢嘪嘬一嘭」这种形近/生僻字，
+   * 原样发给模型只会得到乱码答案，还���把乱码沉淀进本地题库污染后续命中。
+   * 识别为加密题后 stem 置空，由上层转走截图识别。
+   */
+  encrypted?: boolean;
 }
 
 /** AI 问答通道：任意 OpenAI 兼容的 /chat/completions 端点 */
