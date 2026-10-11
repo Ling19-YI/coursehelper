@@ -2,6 +2,7 @@
 import type { EngineHooks } from './hooks';
 import type { AnswerChannel, QType, QuizOption, QuizQuestion } from './quizTypes';
 import { CacheSearcher, LlmSearcher, askAI, resolveAnswers, type Searcher } from './searcher';
+import { VisionSearcher } from './visionSearcher';
 import type { TikuStore } from './tiku';
 
 export type { QType, QuizOption, QuizQuestion, AnswerChannel } from './quizTypes';
@@ -623,6 +624,11 @@ export interface QuizOptions {
    * 0 = 关闭闸门。默认 0.8 与 Tide 同取值。
    */
   submitCoverRate?: number;
+  /**
+   * 多模态通道。配了就启用截图搜题，处理图片题干 / 超星字体替换的题；
+   * 没配则这些题留空，由覆盖率闸门拦下交卷。
+   */
+  visionChannel?: AnswerChannel | null;
 }
 
 export const DEFAULT_SUBMIT_COVER_RATE = 0.8;
@@ -686,9 +692,13 @@ export async function handleQuiz(
   // 发给模型只会编答案，还会把乱码沉淀进题库污染后续命中。
   // 留空让覆盖率闸门拦下交卷，比乱猜安全。
   const plain = pending.filter(q => !q.encrypted);
-  const encCount = pending.length - plain.length;
-  if (encCount) {
-    h.log('warn', `    ⚠ ${encCount} 题题干为加密字体（超星 font-cxsecret），文字搜题无法处理，已留空`);
+  const encQs = pending.filter(q => q.encrypted);
+  if (encQs.length) {
+    h.log(
+      'warn',
+      `    ⚠ ${encQs.length} 题题干为图片或超星字体替换，DOM 里读不出，` +
+        (opts?.visionChannel?.apiKey ? '已转截图识别' : '未配置多模态通道，已留空')
+    );
   }
 
   if (plain.length) {
@@ -713,6 +723,24 @@ export async function handleQuiz(
         h.log('info', `      Q${q.index} \u65e0\u89e3\uff0c\u7559\u7a7a`)
       );
       for (const [k, v] of got) answers.set(k, v);
+    }
+
+    // ── 第 4 级：截图识判 ──────────────────────────────
+    // 图片题干 / 字体替换的题，DOM 文字永远不可用，只能看渲染结果。
+    if (encQs.length && opts?.visionChannel?.apiKey && frame) {
+      try {
+        const vs = new VisionSearcher({
+          page,
+          channel: opts.visionChannel,
+          frameFor: () => frame,
+          selectorFor: q => `[data-qh="${q.index}"]`,
+          log: (lv, m) => h.log(lv, m),
+        });
+        const got = await vs.invokeAll(encQs);
+        for (const [k, v] of got) answers.set(k, v);
+      } catch (e: any) {
+        h.log('warn', `    ⚠ 截图识判失败：${String(e?.message || e).slice(0, 60)}`);
+      }
     }
   }
 
