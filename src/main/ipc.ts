@@ -128,8 +128,15 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
     }
     return true;
   });
-  ipcMain.handle('credentials:clear', () => {
+  ipcMain.handle('credentials:clear', async () => {
     store.clearCredentials();
+    // 关键：只删凭据文件不够。内嵌浏览器里旧账号的会话 Cookie 仍在，
+    // 下次登录时超星会直接沿用旧身份——用户看到的就是「清空了却还是老账号」。
+    try {
+      await session.clearAuthCookies();
+    } catch (e) {
+      console.warn('[ipc] 清空凭据时清除 Cookie 失败:', e);
+    }
     return true;
   });
 
