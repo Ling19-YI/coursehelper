@@ -231,6 +231,10 @@ export async function detectDailyLimit(page: Page): Promise<boolean> {
         for (const el of els) {
           const s = getComputedStyle(el);
           if (s.display === 'none' || s.visibility === 'hidden') continue;
+          // ⚠️ 不能只看自身 display：祖先 display:none 时子元素仍报 block，
+          // 隐藏模板会被误判成「上限生效」——那会让整轮刷课白停。
+          // getClientRects() 会算上祖先，被藏起来的元素返回空。
+          if (el.getClientRects().length === 0) continue;
           if (/任务点完成数已达上限|无法完成任务点/.test(el.innerText || '')) return true;
         }
         return false;

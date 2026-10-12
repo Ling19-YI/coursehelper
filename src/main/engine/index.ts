@@ -329,8 +329,15 @@ export class ChaoxingEngine {
         emitProgress();
 
         let processed = 0;
+        // 目录失效（平台刷新/收起/风控页）后允许重新打开课程页一次，
+        // 否则一旦进入空目录状态，后面每个章节都会「找不到」并全部跳过。
+        let reopened = false;
+
         for (let i = startIdx; i < chapters.length; i++) {
           this.ctl.throwIfStopped();
+          // 当日视频任务点上限是「今天都不能记」，继续遍历剩下的章节纯属空转：
+          // 每个章节都会走一遍「检测到上限→跳过」，日志刷屏还白等一晚上。
+          if (dailyLimitHit) break;
           const chapter = chapters[i];
           if (!chapter.onclick || !chapter.onclick.includes('toOld')) continue;
           if (options.resume && progress?.completedChapters.includes(chapter.onclick)) {
@@ -369,7 +376,20 @@ export class ChaoxingEngine {
           // 放进循环的话，每轮都会重新触发 toOld(...,0)——而它的末位参数恒为 0，
           // 等于把页面重置回第一个任务点，第二个视频永远轮不到，还会反复重播
           // 第一个。这正是「一章两个视频不会自动往下」的原因。
-          const entered = await clickChapter(this.opts.page, this.hooks, chapter);
+          let entered = await clickChapter(this.opts.page, this.hooks, chapter);
+          if (!entered && !reopened) {
+            // 目录里找不到多半是页面已失效（实测会出现「返回课程后目录为空」，
+            // 之后每个章节都找不到）。重新打开课程页恢复一次，别直接放弃——
+            // 放弃了就是后面整片章节全部跳过。
+            reopened = true;
+            this.log('warn', '    ⚠ 目录不可用，重新打开课程页后重试');
+            try {
+              await openCourseChapters(this.opts.page, this.hooks, course);
+              entered = await clickChapter(this.opts.page, this.hooks, chapter);
+            } catch (e) {
+              this.log('warn', `    ⚠ 重新打开课程页失败：${String((e as any)?.message || e)}`);
+            }
+          }
           if (!entered) {
             summary.skipped++;
             this.log('warn', '    ⚠ 未能进入该章节，跳过');

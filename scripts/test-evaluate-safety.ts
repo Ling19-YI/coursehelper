@@ -156,6 +156,17 @@ async function main() {
   );
   check('多个 jobLimitTip 时也能找到上限文案', limitMulti === true, `实际 ${limitMulti}`);
 
+  // 祖先 display:none 时子元素自身仍报 display:block，只看自身会把隐藏模板
+  // 误判成「上限生效」——那会让整轮刷课白停。
+  const limitAncestorHidden = await withPage(
+    `<div style="display:none">
+       <div class="jobLimitTip" style="display:block">今日视频任务点完成数已达上限</div>
+     </div>
+     <div class="jobLimitTip" style="display:block">当前章节还有任务点未完成</div>`,
+    p => detectDailyLimit(p)
+  );
+  check('祖先隐藏的上限提示不算命中', limitAncestorHidden === false, `实际 ${limitAncestorHidden}`);
+
   const limitAllHidden = await withPage(
     `<div class="jobLimitTip" style="display:block">当前章节还有任务点未完成</div>
      <div class="jobLimitTip" style="display:none">今日视频任务点完成数已达上限</div>`,
