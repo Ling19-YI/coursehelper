@@ -130,11 +130,38 @@ async function main() {
   const cntNone = await withPage(`<div>无计数元素</div>`, p => readUnfinishedCount(p));
   check('无计数元素时返回 null（不是 0）', cntNone === null, `实际 ${cntNone}`);
 
+  // 实机见过 4 个并列的计数元素。少算会让引擎以为做完了而跳过任务点，
+  // 所以要取最大值（宁可多跑一轮，也不能漏）。
+  const cntMulti = await withPage(
+    `<input type="hidden" class="jobUnfinishCount" value="0">
+     <input type="hidden" class="jobUnfinishCount" value="2">
+     <input type="hidden" class="jobUnfinishCount" value="1">`,
+    p => readUnfinishedCount(p)
+  );
+  check('多个计数元素时取最大值（不漏任务点）', cntMulti === 2, `实际 ${cntMulti}`);
+
   const limit = await withPage(
     `<div class="jobLimitTip" style="display:block">今日视频任务点完成数已达上限，您可以观看视频，但无法完成任务点</div>`,
     p => detectDailyLimit(p)
   );
   check('detectDailyLimit 识别当日上限', limit === true, `实际 ${limit}`);
+
+  // 实测页面上会并列多个同 class 元素，上限文案并不在第一个。
+  // 曾经用 querySelector 只取第一个 → 永远匹配不上 → 上限检测形同虚设。
+  const limitMulti = await withPage(
+    `<div class="jobLimitTip" style="display:block">当前章节还有任务点未完成，是否去完成？</div>
+     <div class="jobLimitTip" style="display:block"></div>
+     <div class="jobLimitTip" style="display:block">今日视频任务点完成数已达上限，您可以观看视频，但无法完成任务点</div>`,
+    p => detectDailyLimit(p)
+  );
+  check('多个 jobLimitTip 时也能找到上限文案', limitMulti === true, `实际 ${limitMulti}`);
+
+  const limitAllHidden = await withPage(
+    `<div class="jobLimitTip" style="display:block">当前章节还有任务点未完成</div>
+     <div class="jobLimitTip" style="display:none">今日视频任务点完成数已达上限</div>`,
+    p => detectDailyLimit(p)
+  );
+  check('上限文案隐藏时不算命中', limitAllHidden === false, `实际 ${limitAllHidden}`);
 
   const limitHidden = await withPage(
     `<div class="jobLimitTip" style="display:none">今日视频任务点完成数已达上限</div>`,

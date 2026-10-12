@@ -184,15 +184,24 @@ async function probeVideo(page: Page, h: EngineHooks) {
 /**
  * 本章节还剩几个任务点未完成（平台自己的隐藏计数）。
  * 读不到返回 null——不能把这个当成 0，否则会误判成「做完了」。
+ *
+ * ⚠️ 页面上会并列多个 .jobUnfinishCount（实机见到 4 个）。取其中的**最大值**：
+ * 宁可多绕一轮（多跑一轮会被 MAX_ROUNDS 兜住，无副作用），
+ * 也不能少算——少算会让引擎以为做完了，直接跳过剩下的任务点，
+ * 那正是要修的「只刷第一个」。
  */
 export async function readUnfinishedCount(page: Page): Promise<number | null> {
   for (const frame of page.frames()) {
     try {
       const v = await frame.evaluate(() => {
-        const el = document.querySelector('input.jobUnfinishCount') as HTMLInputElement | null;
-        if (!el) return null;
-        const n = Number(el.value);
-        return Number.isFinite(n) ? n : null;
+        const els = Array.from(
+          document.querySelectorAll('input.jobUnfinishCount')
+        ) as HTMLInputElement[];
+        const nums = els
+          .map(el => Number(el.value))
+          .filter(n => Number.isFinite(n) && n >= 0);
+        if (!nums.length) return null;
+        return Math.max(...nums);
       });
       if (v !== null) return v;
     } catch {}
@@ -206,16 +215,25 @@ export async function readUnfinishedCount(page: Page): Promise<number | null> {
  * 命中时视频能照常播放，但平台不会把任务点记为完成，进度一动不动。
  * 不单独识别的话，用户看到的是「刷了一整晚一个都没记上」，
  * 而日志里只会显示视频播放正常——完全无从解释。
+ *
+ * ⚠️ 必须遍历**全部** .jobLimitTip，不能 querySelector 取第一个。
+ * 实测同一页面上会并列多个同 class 的元素，顺序大致是：
+ *   [0] "当前章节还有任务点未完成，是否去完成？"
+ *   [1] ""
+ *   [2] "今日视频任务点完成数已达上限……"   ← 想找的是这个
+ * 取第一个只会拿到「还有任务点未完成」，永远匹配不上上限文案。
  */
 export async function detectDailyLimit(page: Page): Promise<boolean> {
   for (const frame of page.frames()) {
     try {
       const hit = await frame.evaluate(() => {
-        const el = document.querySelector('.jobLimitTip') as HTMLElement | null;
-        if (!el) return false;
-        const s = getComputedStyle(el);
-        if (s.display === 'none' || s.visibility === 'hidden') return false;
-        return /任务点完成数已达上限|无法完成任务点/.test(el.innerText || '');
+        const els = Array.from(document.querySelectorAll('.jobLimitTip')) as HTMLElement[];
+        for (const el of els) {
+          const s = getComputedStyle(el);
+          if (s.display === 'none' || s.visibility === 'hidden') continue;
+          if (/任务点完成数已达上限|无法完成任务点/.test(el.innerText || '')) return true;
+        }
+        return false;
       });
       if (hit) return true;
     } catch {}
