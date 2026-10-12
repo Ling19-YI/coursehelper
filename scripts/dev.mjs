@@ -10,13 +10,29 @@ import { esbuildOptions } from './esbuild-config.mjs';
  */
 const require = createRequire(import.meta.url);
 const electronExe = require('electron');
-const DEV_URL = 'http://localhost:5173';
+
+// 显式用 127.0.0.1，不要写 localhost。
+//
+// 踩过的坑：vite 在 Windows 上默认只绑 IPv6 的 ::1。而 waitVite() 用 Node 的
+// fetch 探测，localhost 会解析成 ::1 —— 于是它判定「vite 已就绪」；但
+// Electron 的 Chromium 走的是 127.0.0.1（IPv4），连接被拒，表现为
+//   [main] 创建窗口失败: Error: ERR_FAILED (-2) loading 'http://localhost:5173'
+// 而日志里 vite 明明 ready、端口也空着，极难定位。
+// 显式指定 host 后两边必然同一地址；--strictPort 保证端口被占时直接报错，
+// 而不是悄悄换到 5174 让 DEV_URL 失配。
+const DEV_HOST = '127.0.0.1';
+const DEV_PORT = 5173;
+const DEV_URL = `http://${DEV_HOST}:${DEV_PORT}`;
 
 mkdirSync('app/dist', { recursive: true });
 copyFileSync('node_modules/playwright-core/package.json', 'app/dist/package.json');
 copyFileSync('node_modules/playwright-core/browsers.json', 'app/dist/browsers.json');
 
-const vite = spawn('npx', ['vite'], { stdio: 'inherit', shell: true });
+const vite = spawn(
+  'npx',
+  ['vite', '--host', DEV_HOST, '--port', String(DEV_PORT), '--strictPort'],
+  { stdio: 'inherit', shell: true }
+);
 const ctx = await context(esbuildOptions);
 await ctx.watch();
 
