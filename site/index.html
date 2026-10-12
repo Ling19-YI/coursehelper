@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>刷课助手 CourseHelper — 超星学习通桌面助手</title>
+<meta name="description" content="超星学习通自动播放、任务点完成、AI 答题。完全免费，无激活码，账号仅存本机。">
+<meta name="theme-color" content="#05070d">
+<link rel="icon" href="assets/icon.png">
+<style>
+/* ─────────────────────────────────────────────
+   设计基调：深空蓝渐变 + 大字号 + 大留白
+   字体全部用系统字体（Google Fonts 国内不可达）
+   ───────────────────────────────────────────── */
+:root{
+  --ink:#f4f7fb;
+  --ink-2:#a8b6cc;
+  --ink-3:#6b7a93;
+  --line:rgba(255,255,255,.09);
+  --line-2:rgba(255,255,255,.14);
+  --glass:rgba(255,255,255,.045);
+  --accent:#4ea8ff;
+  --accent-2:#7dd3fc;
+  --r:18px;
+  --maxw:1080px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{
+  background:#05070d;color:var(--ink);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI Variable Display","Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* ── 顶部导航（悬浮胶囊）── */
+.nav{
+  position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:100;
+  width:calc(100% - 32px);max-width:var(--maxw);
+  display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:9px 10px 9px 16px;border-radius:999px;
+  background:rgba(9,13,22,.72);border:1px solid var(--line);
+  backdrop-filter:blur(18px) saturate(160%);
+  -webkit-backdrop-filter:blur(18px) saturate(160%);
+}
+.nav-l{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;letter-spacing:-.2px}
+.nav-l img{width:26px;height:26px;border-radius:7px}
+.nav-l span{color:var(--ink-3);font-weight:500;font-size:13px;
+  border:1px solid var(--line-2);padding:2px 8px;border-radius:999px}
+.nav-r{display:flex;align-items:center;gap:8px}
+.nav-btn{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:9px 17px;border-radius:999px;font-size:13.5px;font-weight:550;
+  background:var(--glass);border:1px solid var(--line-2);color:var(--ink);
+  transition:background .18s ease,transform .12s ease;white-space:nowrap;
+}
+.nav-btn:hover{background:rgba(255,255,255,.1)}
+.nav-btn:active{transform:scale(.98)}
+.nav-btn.primary{background:#fff;color:#080b12;border-color:#fff;font-weight:650}
+.nav-btn.primary:hover{background:#e6ecf5}
+@media(max-width:600px){.nav-l span{display:none}.nav-btn{padding:8px 13px;font-size:13px}}
+
+/* ── Hero ── */
+.hero{
+  position:relative;text-align:center;
+  padding:158px 0 0;overflow:hidden;
+}
+/* 渐变光晕：模仿深空蓝，不做纯色 */
+.hero::before{
+  content:"";position:absolute;inset:-30% -20% auto -20%;height:820px;pointer-events:none;
+  background:
+    radial-gradient(560px 340px at 50% 32%,rgba(78,168,255,.30),transparent 62%),
+    radial-gradient(900px 520px at 22% 8%,rgba(96,88,255,.22),transparent 66%),
+    radial-gradient(760px 420px at 82% 4%,rgba(0,196,204,.16),transparent 64%);
+  filter:blur(12px);
+}
+.hero::after{
+  content:"";position:absolute;left:50%;top:520px;transform:translateX(-50%);
+  width:1400px;height:600px;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(78,168,255,.13),transparent);
+}
+.hero > *{position:relative;z-index:1}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:12.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent-2);margin-bottom:26px;
+  padding:6px 14px;border-radius:999px;
+  background:rgba(78,168,255,.09);border:1px solid rgba(78,168,255,.22);
+}
+.hero h1{
+  font-size:clamp(38px,6.4vw,68px);line-height:1.06;font-weight:700;
+  letter-spacing:-.035em;margin-bottom:24px;
+  background:linear-gradient(175deg,#fff 34%,#a9bad3);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero h1 em{
+  font-style:normal;display:block;
+  background:linear-gradient(120deg,#7dd3fc,#4ea8ff 55%,#8b8bff);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.hero-sub{
+  max-width:620px;margin:0 auto 38px;color:var(--ink-2);font-size:17px;line-height:1.75;
+}
+.hero-sub b{color:var(--ink);font-weight:600}
+
+/* 主下载按钮 */
+.cta-row{display:flex;flex-direction:column;align-items:center;gap:14px}
+.cta{
+  display:inline-flex;align-items:center;gap:11px;
+  padding:0 30px;height:58px;border-radius:999px;
+  background:#fff;color:#070a11;font-size:16.5px;font-weight:660;letter-spacing:-.01em;
+  box-shadow:0 10px 34px rgba(120,180,255,.28),0 2px 8px rgba(0,0,0,.35);
+  transition:transform .16s ease,box-shadow .16s ease;
+}
+.cta:hover{transform:translateY(-2px);box-shadow:0 16px 44px rgba(120,180,255,.4)}
+.cta:active{transform:translateY(0)}
+.cta svg{width:19px;height:19px;flex-shrink:0}
+.cta-meta{font-size:13px;color:var(--ink-3);line-height:2}
+.cta-meta .k{color:var(--ink-2)}
+.cta-alt{font-size:14px;color:var(--ink-3);margin-top:2px}
+.cta-alt a{color:var(--accent);border-bottom:1px solid rgba(78,168,255,.3);padding-bottom:1px}
+.cta-alt a:hover{border-color:var(--accent)}
+
+/* ── 产品窗口（交通灯 + 圆角）── */
+.showcase{
+  position:relative;z-index:1;
+  max-width:860px;margin:74px auto 0;
+  border-radius:14px;overflow:hidden;
+  border:1px solid var(--line-2);
+  background:#0a0e16;
+  box-shadow:
+    0 30px 90px rgba(0,0,0,.65),
+    0 0 0 1px rgba(255,255,255,.04) inset,
+    0 0 120px rgba(78,168,255,.09);
+}
+.winbar{
+  display:flex;align-items:center;gap:8px;
+  padding:11px 14px;background:#0e131d;border-bottom:1px solid var(--line);
+}
+.dot{width:11px;height:11px;border-radius:50%}
+.dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+.winbar-title{
+  margin-left:8px;font-size:12.5px;color:var(--ink-3);
+  font-family:ui-monospace,Menlo,Consolas,monospace;
+}
+.showcase img{display:block;width:100%;height:auto}
+.showcase::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,transparent 62%,rgba(5,7,13,.92));
+}
+
+/* ── 通用区块 ── */
+section{padding:104px 0}
+.sec-head{max-width:660px;margin-bottom:52px}
+.sec-tag{
+  font-size:12.5px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent-2);margin-bottom:14px;
+}
+.sec-head h2{
+  font-size:clamp(27px,3.6vw,40px);line-height:1.2;font-weight:680;
+  letter-spacing:-.028em;margin-bottom:14px;
+}
+.sec-head p{color:var(--ink-2);font-size:16.5px}
+
+/* ── 功能大卡（2 列）── */
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+@media(max-width:780px){.cards{grid-template-columns:1fr}}
+.card{
+  position:relative;padding:34px 32px 38px;border-radius:var(--r);
+  background:linear-gradient(165deg,rgba(255,255,255,.055),rgba(255,255,255,.018));
+  border:1px solid var(--line);
+  transition:border-color .2s ease,transform .2s ease;
+}
+.card:hover{border-color:rgba(78,168,255,.3);transform:translateY(-3px)}
+.card-ico{
+  width:44px;height:44px;border-radius:12px;display:grid;place-items:center;
+  background:linear-gradient(145deg,rgba(78,168,255,.2),rgba(125,211,252,.08));
+  border:1px solid rgba(78,168,255,.24);margin-bottom:20px;font-size:20px;
+}
+.card h3{font-size:19.5px;font-weight:640;letter-spacing:-.018em;margin-bottom:10px}
+.card p{color:var(--ink-2);font-size:15px;line-height:1.78}
+.card p b{color:var(--ink);font-weight:600}
+.card .hl{
+  display:inline-block;margin-top:14px;font-size:12.5px;color:var(--accent-2);
+  background:rgba(78,168,255,.1);border:1px solid rgba(78,168,255,.2);
+  padding:3px 10px;border-radius:999px;
+}
+
+/* ── 更新日志 ── */
+.log{
+  border-radius:var(--r);border:1px solid var(--line);
+  background:linear-gradient(165deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+  padding:36px 34px;
+}
+.log-head{display:flex;align-items:center;gap:14px;margin-bottom:26px;flex-wrap:wrap}
+.log-ver{
+  font-size:23px;font-weight:700;letter-spacing:-.02em;
+  background:linear-gradient(120deg,#7dd3fc,#4ea8ff);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.log-date{font-size:13px;color:var(--ink-3);
+  border:1px solid var(--line-2);padding:3px 11px;border-radius:999px}
+.log ul{list-style:none;display:grid;gap:13px}
+.log li{
+  position:relative;padding-left:26px;font-size:15px;color:var(--ink-2);line-height:1.75;
+}
+.log li::before{
+  content:"";position:absolute;left:6px;top:11px;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 10px rgba(78,168,255,.75);
+}
+.log li b{color:var(--ink);font-weight:600}
+
+/* ── 支持 ── */
+.support{
+  display:grid;grid-template-columns:1fr 260px;gap:56px;align-items:center;
+  padding:44px 40px;border-radius:var(--r);
+  border:1px solid var(--line);
+  background:
+    radial-gradient(520px 300px at 88% 50%,rgba(78,168,255,.11),transparent 70%),
+    linear-gradient(165deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
+}
+@media(max-width:780px){.support{grid-template-columns:1fr;gap:34px;text-align:center;padding:36px 26px}}
+.support h2{font-size:clamp(24px,3vw,32px);font-weight:670;letter-spacing:-.025em;margin-bottom:16px}
+.support p{color:var(--ink-2);font-size:15.5px;margin-bottom:12px;line-height:1.8}
+.support p b{color:var(--ink)}
+.qr{
+  background:#fff;padding:11px;border-radius:16px;display:block;
+  box-shadow:0 18px 50px rgba(0,0,0,.5);width:100%;
+}
+.qr-cap{text-align:center;font-size:12.5px;color:var(--ink-3);margin-top:13px}
+
+/* ── FAQ ── */
+.faq{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+  background:linear-gradient(165deg,rgba(255,255,255,.04),rgba(255,255,255,.012))}
+details{border-bottom:1px solid var(--line)}
+details:last-child{border-bottom:none}
+summary{
+  padding:22px 26px;cursor:pointer;font-size:16px;font-weight:560;
+  display:flex;align-items:center;justify-content:space-between;gap:18px;list-style:none;
+}
+summary::-webkit-details-marker{display:none}
+summary::after{
+  content:"";flex-shrink:0;width:10px;height:10px;
+  border-right:1.8px solid var(--ink-3);border-bottom:1.8px solid var(--ink-3);
+  transform:rotate(45deg) translateY(-2px);transition:transform .22s ease;
+}
+details[open] summary{color:var(--accent-2)}
+details[open] summary::after{transform:rotate(-135deg) translateY(-2px);border-color:var(--accent-2)}
+.faq-body{padding:0 26px 24px;color:var(--ink-2);font-size:14.8px;line-height:1.82}
+.faq-body code{
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.2px;
+  background:rgba(255,255,255,.07);padding:2px 7px;border-radius:6px;color:var(--accent-2);
+}
+
+/* ── FAQ 收藏 ── */
+/* ── 页脚 ── */
+footer{
+  border-top:1px solid var(--line);padding:52px 0 64px;
+  color:var(--ink-3);font-size:13.5px;
+}
+.foot-row{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.foot-links{display:flex;gap:22px;flex-wrap:wrap}
+.foot-links a:hover{color:var(--accent)}
+.foot-note{margin-top:26px;line-height:1.9;max-width:720px;color:#4d5970}
+
+/* 入场动画
+   用 .js 前缀门控：JS 未执行时元素保持可见，
+   避免脚本出错导致整页空白（这是落地页最致命的失败模式）*/
+.js .rise{opacity:0;transform:translateY(18px);
+  transition:opacity .7s cubic-bezier(.22,1,.36,1),transform .7s cubic-bezier(.22,1,.36,1)}
+.js .rise.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.js .rise{opacity:1;transform:none;transition:none}}
+</style>
+</head>
+<body>
+
+<!-- 导航 -->
+<nav class="nav">
+  <div class="nav-l">
+    <img src="assets/icon.png" alt="">
+    刷课助手
+    <span>v2.1.0</span>
+  </div>
+  <div class="nav-r">
+    <a class="nav-btn" href="https://gitcode.com/2603_95808828/coursehelp" target="_blank" rel="noopener">源码</a>
+    <a class="nav-btn primary" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.0/CourseHelper-Setup-2.1.0.exe">下载</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">✦ Windows 桌面应用</div>
+    <h1>超星学习通的<em>自动助手</em></h1>
+    <p class="hero-sub">
+      视频自动播放、任务点自动完成、测验 AI 答题。<br>
+      完全免费，无激活码，<b>账号只存在你自己电脑上</b>。
+    </p>
+
+    <div class="cta-row">
+      <a class="cta" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.0/CourseHelper-Setup-2.1.0.exe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v13M6 11l6 6 6-6M5 21h14"/>
+        </svg>
+        下载 Windows 安装包
+      </a>
+      <div class="cta-meta">
+        <span class="k">110 MB</span> · Windows 10 / 11 (64 位)
+      </div>
+      <div class="cta-alt">
+        GitHub 打不开？<a href="https://github.com/Ling19-YI/coursehelper/releases/tag/v2.1.0" target="_blank" rel="noopener">备用渠道</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- 产品窗口 -->
+  <div class="wrap" style="padding:0 24px">
+    <div class="showcase">
+      <div class="winbar">
+        <i class="dot r"></i><i class="dot y"></i><i class="dot g"></i>
+        <span class="winbar-title">刷课助手 CourseHelper</span>
+      </div>
+      <img src="assets/app-panel.png" alt="刷课助手运行界面">
+    </div>
+  </div>
+</header>
+
+<!-- 功能 -->
+<section class="wrap">
+  <div class="sec-head rise">
+    <div class="sec-tag">功能</div>
+    <h2>打开就不用再守着电脑</h2>
+    <p>从第一节跑到最后一节，中途遇到验证会停下来等你，而不是硬闯。</p>
+  </div>
+
+  <div class="cards">
+    <div class="card rise">
+      <div class="card-ico">▶</div>
+      <h3>视频自动播放</h3>
+      <p>任务点自动续播，支持 <b>1x / 1.25x / 1.5x / 2x</b> 倍速。平台强制降速时会自动改回并提示。默认静音，设置里可关。</p>
+    </div>
+    <div class="card rise">
+      <div class="card-ico">📄</div>
+      <h3>文档任务点</h3>
+      <p>自动渐进滚动到底，再用平台的「已完成」标记校验，确保真的计入进度，而不是白刷。</p>
+    </div>
+    <div class="card rise">
+      <div class="card-ico">🧠</div>
+      <h3>AI 答题</h3>
+      <p>章节测验与随堂弹题都能作答，支持<b>看图答题</b>。答过的题存进<b>本地题库</b>，下次直接命中，不重复调用接口。</p>
+      <span class="hl">题库沉淀 · 多级答案链</span>
+    </div>
+    <div class="card rise">
+      <div class="card-ico">🛡</div>
+      <h3>遇到验证不硬闯</h3>
+      <p>检测到<b>手机扫码、验证码、人脸识别</b>时立即停止所有模拟操作，等你自己处理完再继续——不会一边刷一边把二维码刷掉。</p>
+      <span class="hl">已验证的真实修复</span>
+    </div>
+    <div class="card rise">
+      <div class="card-ico">💾</div>
+      <h3>断点续跑</h3>
+      <p>进度实时保存。随时暂停或停止，下次接着刷，不会重复已完成的任务点。</p>
+    </div>
+    <div class="card rise">
+      <div class="card-ico">🔄</div>
+      <h3>应用内更新</h3>
+      <p>「关于」页点一下检查更新。<b>GitHub 打不开会自动切到 GitCode</b> 下载，国内网络也能升级。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 更新日志 -->
+<section class="wrap">
+  <div class="sec-head rise">
+    <div class="sec-tag">更新日志</div>
+    <h2>v2.1.0</h2>
+    <p>2026-10-12 · 23 项用户反馈修复</p>
+  </div>
+  <div class="log rise">
+    <div class="log-head">
+      <span class="log-ver">v2.1.0</span>
+      <span class="log-date">2026-10-12</span>
+    </div>
+    <ul>
+      <li><b>一章多任务点</b>：改为在同一页内逐个推进，不再只处理第一个（此前第二个任务点永远轮不到）</li>
+      <li><b>截图识题真正接通</b>：图片题干 / 超星字体替换的题目此前通道从未传进去，现可正常作答</li>
+      <li>修复<b>课程正文被误判成「人脸识别弹窗」</b>，导致整门课卡住、连累后面的课</li>
+      <li>修复<b>换账号后检测不到任务点</b>、<b>进度串号</b></li>
+      <li>修复<b>右侧界面遮挡左侧操作面板</b>（窗口越宽遮得越多）</li>
+      <li>修复<b>需要向下拖动的图片文档无法完成</b></li>
+      <li>新增<b>平台当日任务点上限识别</b>：不再空转一整晚，并直接说明原因</li>
+      <li>窗口尺寸与位置会被记住；<b>验证类弹窗默认不再暂停</b></li>
+    </ul>
+  </div>
+</section>
+
+<!-- 支持 -->
+<section class="wrap">
+  <div class="support rise">
+    <div>
+      <h2>支持开发</h2>
+      <p>这是一个学生独立维护的开源项目，上课之余更新，进度不会很快，请多包涵。</p>
+      <p>如果它帮到了你，扫码请我喝瓶水就行。</p>
+      <p style="margin-bottom:0"><b>当然，把遇到的问题反馈给我，比打赏更有用。</b></p>
+    </div>
+    <div>
+      <img class="qr" src="assets/donate.png" alt="微信收款码">
+      <div class="qr-cap">微信扫码 · 随缘支持</div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section class="wrap">
+  <div class="sec-head rise">
+    <div class="sec-tag">常见问题</div>
+    <h2>先看这里</h2>
+  </div>
+  <div class="faq rise">
+    <details>
+      <summary>账号密码会被上传吗？</summary>
+      <div class="faq-body">不会。账号密码用 Windows 系统加密保存在你自己电脑上，不写入配置文件、不发送到任何服务器。AI 接口 Key 同理。</div>
+    </details>
+    <details>
+      <summary>AI 答题需要自己配置吗？</summary>
+      <div class="faq-body">需要。设置页填一个多模态模型的接口地址和 Key，要求兼容 OpenAI 的 <code>chat/completions</code>。不配也能用，只是不答题——视频和文档任务点照常完成。</div>
+    </details>
+    <details>
+      <summary>答题准确率怎么样？</summary>
+      <div class="faq-body">各校题目结构差异很大，无法保证。答错或答不了的情况会有，重要测验建议自己核对一遍。</div>
+    </details>
+    <details>
+      <summary>支持雨课堂吗？</summary>
+      <div class="faq-body">暂时只支持超星学习通。多平台支持在开发中，尚未上线。</div>
+    </details>
+    <details>
+      <summary>下载速度慢怎么办？</summary>
+      <div class="faq-body">优先用上面的下载按钮（GitCode，国内直连）。GitHub 也可以，但国内访问可能很慢甚至打不开。</div>
+    </details>
+    <details>
+      <summary>有广告或捆绑吗？</summary>
+      <div class="faq-body">没有。完全免费，无激活码，无需注册。</div>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-row">
+      <div>
+        <div style="color:var(--ink-2);font-weight:560;margin-bottom:7px">刷课助手 CourseHelper</div>
+        <div>超星学习通桌面助手</div>
+      </div>
+      <div class="foot-links">
+        <a href="https://gitcode.com/2603_95808828/coursehelp" target="_blank" rel="noopener">GitCode 仓库</a>
+        <a href="https://github.com/Ling19-YI/coursehelper" target="_blank" rel="noopener">GitHub 仓库</a>
+        <a href="https://gitcode.com/2603_95808828/coursehelp/-/releases" target="_blank" rel="noopener">全部版本</a>
+      </div>
+    </div>
+    <div class="foot-note">
+      请遵守所在学校的课程学习纪律，软件仅供个人学习参考。<br>
+      本项目为开源软件，按「现状」提供，不附带任何明示或暗示的担保。
+    </div>
+  </div>
+</footer>
+
+<script>
+// 入场动画。用 .js 门控 + 兜底定时器，任何异常都不会让内容消失
+(function () {
+  document.documentElement.classList.add('js');
+  var nodes = document.querySelectorAll('.rise');
+  function revealAll() { nodes.forEach(function (el) { el.classList.add('in'); }); }
+  try {
+    if (!('IntersectionObserver' in window)) { revealAll(); return; }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
+    nodes.forEach(function (el, i) {
+      el.style.transitionDelay = Math.min(i * 45, 240) + 'ms';
+      io.observe(el);
+    });
+    // 兜底：无论观察器是否生效，3 秒后全部显示
+    setTimeout(revealAll, 3000);
+  } catch (e) { revealAll(); }
+})();
+</script>
+</body>
+</html>
