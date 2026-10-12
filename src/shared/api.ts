@@ -45,6 +45,14 @@ export interface Api {
   installUpdate(): Promise<boolean>;
   getUpdateState(): Promise<UpdateState>;
   onUpdateEvent(cb: (s: UpdateState) => void): () => void;
+  /**
+   * 主进程算出的左侧面板宽度（px）。
+   *
+   * 右侧学习通是 WebContentsView，叠在渲染层之上。两者的宽度必须同源——
+   * 渲染层原来自己写 `width: 46%`，主进程按 MIN_VIEW_WIDTH/MAX_PANEL_WIDTH
+   * 另算一套，窗口一宽就对不上：面板被右侧视图盖住一截（1920 宽时盖 263px）。
+   */
+  onPanelWidth(cb: (px: number) => void): () => void;
 }
 
 declare global {

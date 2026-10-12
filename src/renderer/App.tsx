@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { App as AntApp, ConfigProvider, Menu, Spin, Tag, theme } from 'antd';
 import {
   DashboardOutlined,
@@ -14,6 +14,21 @@ import Monitor from './pages/Monitor';
 import SettingsPage from './pages/Settings';
 import About from './pages/About';
 import type { TaskState } from '../shared/types';
+
+/**
+ * 左侧面板宽度由主进程决定（右侧学习通是叠在上面的 WebContentsView，
+ * 两者的宽度必须同源）。这里把主进程算出的值写进 CSS 变量。
+ *
+ * 不要退回去用 `width: 46%` 之类的百分比：那会和主进程的
+ * MIN_VIEW_WIDTH / MAX_PANEL_WIDTH 算成两套结果，窗口一宽右侧就盖住面板。
+ */
+function usePanelWidth() {
+  useEffect(() => {
+    return window.ch.onPanelWidth(px => {
+      document.documentElement.style.setProperty('--panel-width', `${px}px`);
+    });
+  }, []);
+}
 
 export const STATE_META: Record<string, { color: string; text: string }> = {
   idle: { color: 'default', text: '空闲' },
@@ -73,6 +88,7 @@ function Shell() {
 }
 
 export default function App() {
+  usePanelWidth();
   return (
     <ConfigProvider
       theme={{

@@ -61,6 +61,12 @@ function layout() {
     view = w - panel;
   }
   session.setBounds({ x: panel, y: 0, width: Math.max(0, w - panel), height: h });
+
+  // 左侧面板宽度必须与视图起点同源。
+  // 渲染层原来自己写 `width: 46%`，与此处按 MIN_VIEW_WIDTH/MAX_PANEL_WIDTH
+  // 算出的 panel 是两套逻辑，窗口一宽就对不上——右侧视图会盖住面板一截
+  // （1920 宽时盖 263px）。所以这里把 panel 推给渲染层，由它照此设宽。
+  if (!win.isDestroyed()) win.webContents.send('layout:panel', panel);
 }
 
 async function createWindow() {
@@ -119,9 +125,14 @@ async function createWindow() {
   layout();
   registerIpc(store, session, () => win);
 
+  // 渲染层就绪后再算一次：layout() 在 new Session(win) 之后立刻跑过一次，
+  // 那时页面还没加载，send 出去的宽度没人接。
+  win.webContents.on('did-finish-load', layout);
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) await win.loadURL(devUrl);
   else await win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+  layout();
 
   win.on('closed', () => {
     session?.dispose();
