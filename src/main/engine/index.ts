@@ -129,6 +129,21 @@ export class ChaoxingEngine {
     return null;
   }
 
+  /**
+   * 多模态专用通道，供「截图搜题」用。
+   *
+   * ⚠️ 不要复用 answerChannel()：那个在没配多模态时会回退到 DeepSeek，
+   * 而 DeepSeek 是纯文本模型，收不了图。截图识判必须只认多模态配置，
+   * 否则会把图片请求发到不支持图片的接口上，返回一句看不出因果的错。
+   */
+  private visionChannel(): AnswerChannel | null {
+    const v = this.opts.getVision();
+    if (v?.apiKey && v.baseUrl) {
+      return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model, label: '多模态' };
+    }
+    return null;
+  }
+
   get currentState() {
     return this.state;
   }
@@ -441,7 +456,16 @@ export class ChaoxingEngine {
                   this.hooks,
                   this.opts.getDeepseekKey(),
                   this.answerChannel(),
-                  { tiku: this.tiku, submitCoverRate: this.opts.getSubmitCoverRate() }
+                  {
+                    tiku: this.tiku,
+                    submitCoverRate: this.opts.getSubmitCoverRate(),
+                    // 必须显式传：QuizOptions 里早就有这个字段，注释也写明
+                    // 「配了就启用截图搜题」，但调用方一直漏传，于是
+                    // `opts?.visionChannel?.apiKey` 恒为 undefined ——
+                    // 图片题干/超星字体替换的题从来没走过截图识别，
+                    // 日志还一直显示「未配置多模态通道」（即使配了）。
+                    visionChannel: this.visionChannel(),
+                  }
                 );
                 if (qr.success) {
                   this.store.markChapterDone(ensureProgress(), chapter.onclick);

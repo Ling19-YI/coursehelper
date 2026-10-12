@@ -863,23 +863,26 @@ export async function handleQuiz(
       );
       for (const [k, v] of got) answers.set(k, v);
     }
-
-    // ── 第 4 级：截图识判 ──────────────────────────────
-    // 图片题干 / 字体替换的题，DOM 文字永远不可用，只能看渲染结果。
-    if (encQs.length && opts?.visionChannel?.apiKey && frame) {
-      try {
-        const vs = new VisionSearcher({
-          page,
-          channel: opts.visionChannel,
-          frameFor: () => frame,
-          selectorFor: q => `[data-qh-root="${q.index}"]`,
-          log: (lv, m) => h.log(lv, m),
-        });
-        const got = await vs.invokeAll(encQs);
-        for (const [k, v] of got) answers.set(k, v);
-      } catch (e: any) {
-        h.log('warn', `    ⚠ 截图识判失败：${String(e?.message || e).slice(0, 60)}`);
-      }
+  }
+  // ── 第 4 级：截图识判 ──────────────────────────────
+  // 图片题干 / 字体替换的题，DOM 文字永远不可用，只能看渲染结果。
+  //
+  // ⚠️ 必须放在 if (plain.length) **之外**：整卷都是图片/字体替换题时
+  // plain 为空，而「整卷都读不出文字」恰恰是最需要截图识判的场景——
+  // 放在里面等于最该执行的时候恰好不执行（实测 5 题全加密 → 覆盖 0%）。
+  if (encQs.length && opts?.visionChannel?.apiKey && frame) {
+    const vs = new VisionSearcher({
+      page,
+      channel: opts.visionChannel,
+      frameFor: () => frame,
+      selectorFor: q => `[data-qh-root="${q.index}"]`,
+      log: (lv, m) => h.log(lv, m),
+    });
+    try {
+      const got = await vs.invokeAll(encQs);
+      for (const [k, v] of got) answers.set(k, v);
+    } catch (e: any) {
+      h.log('warn', `    ⚠ 截图识判失败：${String(e?.message || e).slice(0, 60)}`);
     }
   }
 

@@ -17,6 +17,7 @@
  * 无需登录，跑得很快。用法：tsx scripts/test-evaluate-safety.ts
  */
 
+import { readFileSync } from 'fs';
 import { chromium } from 'playwright';
 import { detectManualBlock } from '../src/main/engine/blocker';
 import {
@@ -269,6 +270,32 @@ async function main() {
   // 保活 ticker 必须遵守同一个「目标」定义。它曾经无条件
   // `querySelectorAll('video')` 全量拉起，是「两个视频同时播」的直接原因。
   check('保活 ticker 带目标守卫', SPY_JS.includes('data-ch-target'), '');
+
+  console.log('\n[答题通道接线（源码结构守卫）]');
+
+  // 起因：QuizOptions.visionChannel 早就定义了，注释还写着「配了就启用截图
+  // 搜题」，但调用方一直漏传 —— 于是「未配置多模态通道」这句日志骗了所有人，
+  // 截图识判代码从来没被执行过。这类「参数忘了传」不会有编译错误，
+  // 只能靠结构断言守。
+  const idx = readFileSync('src/main/engine/index.ts', 'utf8');
+  check(
+    'engine 调用 handleQuiz 时传了 visionChannel',
+    /visionChannel:\s*this\.visionChannel\(\)/.test(idx),
+    ''
+  );
+
+  const qtx = readFileSync('src/main/engine/quiz.ts', 'utf8');
+  const visionLine = qtx
+    .split('\n')
+    .find(l => l.includes('if (encQs.length && opts?.visionChannel?.apiKey && frame)'));
+  // 缩进 2 空格 = 在 handleQuiz 函数体顶层；4 空格说明又被塞回
+  // `if (plain.length)` 里 —— 那样整卷都是加密题时它不会执行，
+  // 而「整卷读不出文字」正是最需要它的场景。
+  check(
+    '截图识判没被包在 if (plain.length) 里',
+    !!visionLine && /^ {2}if /.test(visionLine),
+    `实际缩进 ${visionLine ? visionLine.length - visionLine.trimStart().length : -1} 空格`
+  );
 
   console.log(`\n结果：${pass} 通过，${fail} 失败\n`);
   process.exit(fail > 0 ? 1 : 0);
