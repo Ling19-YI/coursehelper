@@ -29,16 +29,28 @@ export interface UpdatePayload {
 const isDev = !app.isPackaged;
 
 /**
- * 更新源列表，按顺序尝试，失败自动回退到下一个。
+ * 更新源列表，按顺序尝试，必要时回退到下一个。
  *
  * 为什么需要多源：国内大量用户无法访问 GitHub，
  * 只挂 GitHub 的话他们装完就再也收不到更新。
  *
- * GitCode 侧有两个坑，都实测踩过：
+ * 「继续试下一个源」有两种触发条件，缺一不可：
+ *   1) 这个源不可达（超时 / 报错）；
+ *   2) 这个源可达，但只回「已是最新」。
+ * 第 2 条尤其容易漏：两个平台的发布节奏不保证同步——本次 v2.1.0 就是先发
+ * GitCode、GitHub 当时还没发。若在「已是最新」处就收工，能上 GitHub 的用户
+ * 会一直看不到更新（旧实现即如此）。
+ *
+ * GitCode 侧有三个坑，都实测踩过：
  *   1) 不能用 releases/latest/download/latest.yml 这种「跟随最新版本」的写法，
  *      该地址返回的是 HTML 登录页而非 yml；
  *   2) 正确结构是 releases/download/<tag>/，若写成 releases/<tag>/download/
  *      会返回一个 3.5KB 的 HTML 错误页（而不是报 404，极易误判为下载成功）。
+ *   3) **URL 上一旦带查询串就 404**——`?noCache=1`、`?x=1` 全都 404，不带就 200。
+ *      而 electron-updater 给 generic 源取 latest.yml 时会自动追加
+ *      `?noCache=<随机>`（见其 util.js 的 newUrlFromBase），所以这条回退路径
+ *      此前**从未成功过**:检查更新时表现为「GitCode 侧不可达」。
+ *      对策见 initUpdater 里关掉 isAddNoCacheQuery 的那段注释。
  * 因此每次检查前先调 API 取回当前最新 tag，再拼出真实地址。
  */
 const SOURCES: Array<{
@@ -131,6 +143,24 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+
+  // 关掉 electron-updater 的 `?noCache=<随机>` 缓存破坏参数。
+  //
+  // 它给 generic 源取 latest.yml 时会自动追加这个查询串，而 GitCode 的下载域名
+  // **只要 URL 带任何查询串就返回 404**（实测 `?noCache=1`、`?x=1` 全部 404，
+  // 不带查询串则 200）。结果是 GitCode 这条回退路径永远失败，且错误文案是
+  // 「Cannot find channel "latest.yml" update info: 404」，看着像文件没传上去，
+  // 极易把人引向错误方向。
+  //
+  // 关掉它不影响缓存正确性：GitCode 每个版本有独立目录（/download/<tag>/），
+  // URL 本身随版本变化，不靠查询串也已经不会取到旧的 latest.yml。
+  //
+  // isAddNoCacheQuery 是 electron-updater 原型上的 getter（无 setter），
+  // 直接赋值在 ESM 严格模式下会抛错，必须用 defineProperty 遮蔽。
+  Object.defineProperty(autoUpdater, 'isAddNoCacheQuery', {
+    value: false,
+    configurable: true,
+  });
   // 未发布签名时也要能下载更新：跳过校验会降低安全性，
   // 但本项目安装包本身也未做代码签名，因此保持一致
   autoUpdater.logger = null;
@@ -154,6 +184,9 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
   });
 
   autoUpdater.on('update-not-available', (info: any) => {
+    // 多源探测期间不急着下结论：某个源说「已是最新」，另一个源可能已经发了新版
+    // （两个平台的发布节奏不保证同步）。等所有源都试完，由 checkForUpdates 统一给结论。
+    if (probing) return;
     checking = false;
     merge({
       checking: false,
@@ -193,26 +226,38 @@ export function initUpdater(getWindow: () => BrowserWindow | null) {
   });
 }
 
-/** 用指定源尝试一次检查，返回是否成功（含「已是最新」也算成功） */
-function probeOnce(cfg: Record<string, unknown>, timeoutMs: number): Promise<boolean> {
-  return new Promise<boolean>(resolve => {
+/**
+ * 单次探测的结果。
+ *
+ * 必须区分「已是最新」和「不可达」——这两者含义完全不同：
+ *   前者说明这个源工作正常、只是没有新版，此时仍要去问下一个源；
+ *   后者才该记一笔失败。
+ * 早期版本把两者都当成「成功」并立即收工，于是「GitHub 上还是旧版本、
+ * GitCode 上已经发了新版」时，用户会一直看到「当前已是最新版本」。
+ */
+type ProbeResult = 'available' | 'uptodate' | 'failed';
+
+/** 用指定源尝试一次检查 */
+function probeOnce(cfg: Record<string, unknown>, timeoutMs: number): Promise<ProbeResult> {
+  return new Promise<ProbeResult>(resolve => {
     let settled = false;
-    const done = (ok: boolean) => {
+    const done = (r: ProbeResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      autoUpdater.removeListener('update-available', onOk);
-      autoUpdater.removeListener('update-not-available', onOk);
+      autoUpdater.removeListener('update-available', onAvail);
+      autoUpdater.removeListener('update-not-available', onNot);
       autoUpdater.removeListener('error', onFail);
-      resolve(ok);
+      resolve(r);
     };
-    const onOk = () => done(true);
-    const onFail = () => done(false);
+    const onAvail = () => done('available');
+    const onNot = () => done('uptodate');
+    const onFail = () => done('failed');
 
-    const timer = setTimeout(() => done(false), timeoutMs);
+    const timer = setTimeout(() => done('failed'), timeoutMs);
 
-    autoUpdater.on('update-available', onOk);
-    autoUpdater.on('update-not-available', onOk);
+    autoUpdater.on('update-available', onAvail);
+    autoUpdater.on('update-not-available', onNot);
     autoUpdater.on('error', onFail);
 
     try {
@@ -232,6 +277,8 @@ export async function checkForUpdates(): Promise<void> {
   merge({ checking: true, available: false, message: '正在检查更新…' });
 
   const failures: string[] = [];
+  /** 至少有一个源明确答复「已是最新」。全都不行时，这就是最可信的结论 */
+  let sawUptodate = false;
 
   try {
     for (const src of SOURCES) {
@@ -247,9 +294,19 @@ export async function checkForUpdates(): Promise<void> {
       }
 
       activeSource = src.name;
-      const ok = await probeOnce(cfg, src.timeoutMs);
-      if (ok) return; // update-available / update-not-available 已触发并更新了 UI
+      const r = await probeOnce(cfg, src.timeoutMs);
+      if (r === 'available') return; // update-available 已触发并更新了 UI
+      if (r === 'uptodate') {
+        // 这个源工作正常、只是没有新版 —— 但别的源可能有，继续问下去。
+        sawUptodate = true;
+        continue;
+      }
       failures.push(`${src.name}: 不可达`);
+    }
+
+    if (sawUptodate) {
+      merge({ checking: false, available: false, message: '当前已是最新版本' });
+      return;
     }
 
     merge({

@@ -314,6 +314,32 @@ async function main() {
     ''
   );
 
+  console.log('\n[在线更新双源（源码结构守卫）]');
+
+  // 起因：v2.1.0 只发到了 GitCode 时，能访问 GitHub 的用户在「关于」页永远
+  // 看不到更新。两个原因叠在一起：
+  //   1) electron-updater 给 generic 源取 latest.yml 时会自动追加 ?noCache=<随机>，
+  //      而 GitCode 的下载域名只要 URL 带查询串就 404 —— GitCode 回退从未成功过；
+  //   2) 旧循环把「已是最新」也当成「成功」并立即 return，GitHub 上还是旧版本时
+  //      就不再问 GitCode。
+  // 这两点都不会有编译错误，只能靠结构断言守。
+  const upd = readFileSync('src/main/updater.ts', 'utf8');
+  check(
+    'updater 关掉了 noCache 查询串（否则 GitCode 一律 404）',
+    /isAddNoCacheQuery/.test(upd) && /value:\s*false/.test(upd),
+    ''
+  );
+  check(
+    'updater 不在「已是最新」处提前收工（要继续问下一个源）',
+    /sawUptodate/.test(upd) && !/const ok = await probeOnce/.test(upd),
+    ''
+  );
+  check(
+    'updater 区分「已是最新」与「不可达」两种结果',
+    /type ProbeResult = 'available' \| 'uptodate' \| 'failed'/.test(upd),
+    ''
+  );
+
   console.log(`\n结果：${pass} 通过，${fail} 失败\n`);
   process.exit(fail > 0 ? 1 : 0);
 }
