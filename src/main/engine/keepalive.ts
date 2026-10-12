@@ -18,10 +18,6 @@ let desiredRate = 1;
 
 const clampRate = (r: number) => Math.min(2, Math.max(1, Number(r) || 1));
 
-export function getDesiredRate(): number {
-  return desiredRate;
-}
-
 /** 设置倍速（页面重载后需重新调用）：>1x 持续维持，≤1x 一律恢复原速 */
 export async function setVideoRate(page: Page, rate: number): Promise<void> {
   desiredRate = clampRate(rate);

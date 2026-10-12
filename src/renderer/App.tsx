@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { App as AntApp, ConfigProvider, Menu, Spin, Tag, theme } from 'antd';
+import { App as AntApp, ConfigProvider, Menu, Tag, theme } from 'antd';
 import {
   DashboardOutlined,
   FolderOpenOutlined,

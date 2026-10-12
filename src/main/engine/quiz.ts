@@ -1,7 +1,7 @@
 ﻿import type { Page, Frame } from 'playwright';
 import type { EngineHooks } from './hooks';
 import type { AnswerChannel, QType, QuizOption, QuizQuestion } from './quizTypes';
-import { CacheSearcher, LlmSearcher, askAI, resolveAnswers, type Searcher } from './searcher';
+import { CacheSearcher, LlmSearcher, resolveAnswers, type Searcher } from './searcher';
 import { VisionSearcher } from './visionSearcher';
 import type { TikuStore } from './tiku';
 
@@ -30,7 +30,6 @@ const POPUP_SELECTORS = [
   '.mask',
 ];
 
-const TEXT_CLEAN = (s: string) => (s || '').replace(/\u00a0/g, ' ').replace(/[\t\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
 /**
  * 超星的题目容器。
@@ -951,94 +950,4 @@ export async function isQuizPage(page: Page): Promise<boolean> {
     if (qs.some(isPlausibleQuestion)) return true;
   }
   return false;
-}
-
-export async function getQuizPageText(page: Page): Promise<string> {
-  const frames = await findQuizFrames(page);
-  for (const f of frames) {
-    try {
-      const t = await f.evaluate(() => (document.body && document.body.innerText) || '');
-      if (t) return t;
-    } catch {}
-  }
-  return '';
-}
-
-export async function getQuizFrame(page: Page) {
-  return page
-    .frameLocator('#iframe')
-    .frameLocator('iframe')
-    .frameLocator('iframe[name="frame_content"], iframe');
-}
-
-export async function askDeepSeekForPage(apiKey: string, pageText: string): Promise<any[]> {
-  const LIMIT_MS = 45000;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
-  let resp: Response;
-  try {
-    resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'system',
-            content:
-              '\u4f60\u662f\u7b54\u9898\u52a9\u624b\u3002\u5206\u6790\u6d4b\u9a8c\u7f51\u9875\u6587\u672c\uff0c\u9009\u51fa\u6bcf\u9898\u6b63\u786e\u7b54\u6848\u3002\u8fd4\u56deJSON: [{"question":1,"answer":"A","note":"\u89e3\u91ca"}]\u3002answer: \u5355\u9009="A", \u591a\u9009="AB", \u5224\u65ad="\u5bf9"/"\u9519", \u586b\u7a7a\u5199\u6587\u5b57\u3002\u4e0d\u786e\u5b9a\u586b"?"\u3002\u53ea\u8f93\u51faJSON\u3002',
-          },
-          { role: 'user', content: `\u56de\u7b54\u4ee5\u4e0b\u6d4b\u9a8c:\n\n${pageText}` },
-        ],
-        temperature: 0.1,
-        max_tokens: 2000,
-      }),
-      signal: ctrl.signal,
-    });
-  } catch (e: any) {
-    clearTimeout(timer);
-    throw new Error(
-      e?.name === 'AbortError'
-        ? `DeepSeek 超时（${LIMIT_MS / 1000}s）`
-        : `DeepSeek 连接失败: ${String(e?.message || e).slice(0, 60)}`
-    );
-  }
-  clearTimeout(timer);
-  if (!resp.ok) throw new Error(`DeepSeek API ${resp.status}`);
-  const raw = ((await resp.json()) as any).choices?.[0]?.message?.content || '';
-  const m = raw.match(/\[[\s\S]*\]/);
-  if (!m) throw new Error('AI \u683c\u5f0f\u9519\u8bef: ' + raw.substring(0, 100));
-  return JSON.parse(m[0]);
-}
-
-export async function clickAnswersByLabel(
-  page: Page,
-  h: EngineHooks,
-  answers: any[]
-): Promise<number> {
-  const frames = await findQuizFrames(page);
-  let frame: Frame | null = null;
-  let questions: QuizQuestion[] = [];
-  for (const f of frames) {
-    const qs = await extractQuestions(f).catch(() => [] as QuizQuestion[]);
-    if (qs.length > questions.length) {
-      questions = qs;
-      frame = f;
-    }
-  }
-  if (!frame) return 0;
-  return applyAnswers(
-    page,
-    frame,
-    questions,
-    answers.map(a => ({ i: Number(a.question) || 0, answer: String(a.answer || '') })),
-    undefined,
-    h
-  );
-}
-
-export async function submitQuiz(page: Page, h: EngineHooks): Promise<boolean> {
-  const frames = await findQuizFrames(page);
-  const frame = frames[frames.length - 1] || page.mainFrame();
-  return submitQuizIn(page, frame, undefined, h, '\u5df2\u63d0\u4ea4');
 }

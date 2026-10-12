@@ -1,6 +1,6 @@
 import type { Page, Locator } from 'playwright';
 import type { QuizShot, Rect } from './shot';
-import { captureQuizShot, toElementPoint } from './shot';
+import { captureQuizShot } from './shot';
 import { askQuizByVision, type QuizAnswer, type VisionConfig } from './llm';
 
 /** Agent 可用的工具（注册表=数据，以后加工具不改循环） */

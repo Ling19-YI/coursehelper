@@ -192,8 +192,3 @@ export async function detectManualBlock(
   return null;
 }
 
-/** 供日志使用的一句话摘要 */
-export function describeBlock(b: BlockInfo | null): string {
-  if (!b) return '';
-  return `${b.kind}（${b.matched}）`;
-}
