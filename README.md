@@ -4,6 +4,8 @@
 
 > ⚠️ 本工具仅供学习与技术研究使用，请遵守所在学校与平台的使用规则，风险自负。
 
+**[项目主页](https://ling19-yi.github.io/coursehelper/)** — 图文介绍、更新日志、功能演示
+
 ![运行日志界面](docs/screenshot-log.png)
 
 ## 功能
