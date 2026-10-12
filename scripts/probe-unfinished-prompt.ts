@@ -42,10 +42,9 @@ async function main() {
     agentEnabled: () => false,
     vision: () => ({ baseUrl: '', apiKey: '', model: '' }),
     answerPopup: () => false,
+    autoPauseOnVerify: () => false,
     visionChannel: () => null,
     deepseekKey: () => '',
-    deepseekBaseUrl: () => '',
-    deepseekModel: () => '',
     tiku: () => null,
     submitCoverRate: () => 0.8,
   };

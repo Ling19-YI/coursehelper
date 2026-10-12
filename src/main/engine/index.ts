@@ -45,6 +45,8 @@ export interface EngineOptions {
   getSubmitCoverRate(): number;
   /** 是否自动处理视频播放期间的随堂题弹窗 */
   getAnswerPopup(): boolean;
+  /** 是否因「验证类」弹窗（人脸/验证码/安全验证）暂停等人工。默认 false */
+  getAutoPauseOnVerify(): boolean;
 }
 
 const clean = (s: string) => s.replace(/\n/g, ' ').trim();
@@ -85,6 +87,7 @@ export class ChaoxingEngine {
       agentEnabled: () => !!opts.getAgentEnabled(),
       vision: () => opts.getVision(),
       answerPopup: () => !!opts.getAnswerPopup(),
+      autoPauseOnVerify: () => !!opts.getAutoPauseOnVerify(),
       visionChannel: () => this.answerChannel(),
       deepseekKey: () => opts.getDeepseekKey(),
       tiku: () => this.tiku,

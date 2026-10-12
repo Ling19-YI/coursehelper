@@ -25,6 +25,7 @@ export default function Settings() {
   const [agentOn, setAgentOn] = useState(false);
   const [coverRate, setCoverRate] = useState<number>(0.8);
   const [popupOn, setPopupOn] = useState(false);
+  const [pauseOnVerify, setPauseOnVerify] = useState(false);
   const [muted, setMuted] = useState(true);
   const [visionKey, setVisionKey] = useState('');
   // 不预置地址：公开版本不该把用户导到某个特定服务商（尤其是别人付费的）
@@ -47,6 +48,7 @@ export default function Settings() {
         a.settings.submitCoverRate === undefined ? 0.8 : Number(a.settings.submitCoverRate)
       );
       setPopupOn(!!a.settings.answerPopup);
+      setPauseOnVerify(!!a.settings.autoPauseOnVerify);
       setMuted(a.settings.muted !== false);
     }
     if (a.username) setUsername(a.username);
@@ -80,6 +82,7 @@ export default function Settings() {
         agentEnabled: agentOn,
         submitCoverRate: coverRate,
         answerPopup: popupOn,
+        autoPauseOnVerify: pauseOnVerify,
         muted,
         visionBaseUrl: visionBaseUrl.trim(),
         visionModel: visionModel.trim() || 'mimo-v2.5',
@@ -184,6 +187,24 @@ export default function Settings() {
         </Space>
         <div className="muted" style={{ marginTop: 8 }}>
           接口需兼容 OpenAI 格式（/chat/completions）。单次会逐题截图分批发送，题越多耗时越长。
+        </div>
+      </div>
+
+      <div className="cardish">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <b>遇到人脸识别 / 验证码时暂停</b>
+          <Tooltip title="开启后，检测到人脸识别、验证码或安全验证弹窗会停下手上的模拟动作等人工处理；关闭则照常运行，真卡住时会被判为停滞并跳过该节。">
+            <Switch checked={pauseOnVerify} onChange={setPauseOnVerify} />
+          </Tooltip>
+        </div>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          默认<strong>关闭</strong>。这类弹窗的识别很容易误判——课程正文里本来就会出现「人脸识别」
+          「验证码」这些词，一旦误判整轮刷课就停在那里等人，而日志里看不出所以然。
+          关闭后引擎照常跑，真遇到验证码会因视频停滞被判为卡住并跳过，不会无限等。
+        </div>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          手机扫码不受此项影响：始终会暂停。引擎一旦继续动作，二维码会被平台判定为环境变化
+          而反复刷新，人根本扫不上。
         </div>
       </div>
 

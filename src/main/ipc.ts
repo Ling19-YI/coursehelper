@@ -55,6 +55,8 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
         return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
       },
       getAnswerPopup: () => !!store.settings.answerPopup,
+      // 默认 false：验证类弹窗误判代价高（课程正文含这些词），不因它停摆
+      getAutoPauseOnVerify: () => !!store.settings.autoPauseOnVerify,
     });
     engineDataDir = dataDir;
     return engine;

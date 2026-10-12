@@ -49,10 +49,9 @@ function makeHooks(): EngineHooks {
     agentEnabled: () => false,
     vision: () => ({ baseUrl: '', apiKey: '', model: '' }),
     answerPopup: () => false,
+    autoPauseOnVerify: () => false,
     visionChannel: () => null,
     deepseekKey: () => '',
-    deepseekBaseUrl: () => '',
-    deepseekModel: () => '',
     tiku: () => null,
     submitCoverRate: () => 0.8,
   };
@@ -72,7 +71,7 @@ async function withPage<T>(html: string, fn: (page: any) => Promise<T>): Promise
 }
 
 async function main() {
-  console.log('\n[blocker：正文不得误判 / 真弹层必须命中]');
+  console.log('\n[blocker：正文不得误判]');
 
   const article = await withPage(
     `<div style="padding:40px"><h1>1.4 人工智能的研究</h1>
@@ -81,26 +80,43 @@ async function main() {
   );
   check('正文含「人脸识别」不误判', article === null, `实际 ${article?.kind ?? 'null'}`);
 
-  const overlay = await withPage(
-    `<div style="position:fixed;left:50%;top:40%;width:360px;height:160px;z-index:9999;
-                 background:#fff;padding-top:50px">请完成人脸识别以继续学习</div>`,
-    p => detectManualBlock(p)
-  );
-  check('fixed 覆盖层命中「人脸识别」', overlay?.kind === '人脸识别', `实际 ${overlay?.kind ?? 'null'}`);
-
-  const scan = await withPage(
-    `<div style="position:absolute;left:50px;top:50px;width:340px;height:220px;z-index:2000;
-                 background:#fff;padding:60px 20px">请使用手机扫码确认身份</div>`,
-    p => detectManualBlock(p)
-  );
-  check('absolute 覆盖层命中「扫码」', scan?.kind === '扫码', `实际 ${scan?.kind ?? 'null'}`);
-
   const quiz = await withPage(
     `<div class="ans-videoquiz" style="position:fixed;left:50%;top:40%;width:400px;height:200px;
          z-index:9999;background:#fff;padding:40px">以下关于人脸识别的选项哪个正确？</div>`,
     p => detectManualBlock(p)
   );
   check('随堂弹题不误判为风控', quiz === null, `实际 ${quiz?.kind ?? 'null'}`);
+
+  console.log('\n[验证类默认不暂停（autoPauseOnVerify 默认 false）]');
+
+  const faceOverlay =
+    `<div style="position:fixed;left:50%;top:40%;width:360px;height:160px;z-index:9999;
+                 background:#fff;padding-top:50px">请完成人脸识别以继续学习</div>`;
+  const faceDefault = await withPage(faceOverlay, p => detectManualBlock(p));
+  check('默认：人脸识别弹窗不阻塞', faceDefault === null, `实际 ${faceDefault?.kind ?? 'null'}`);
+
+  const faceOn = await withPage(faceOverlay, p => detectManualBlock(p, true));
+  check('开启后：人脸识别弹窗阻塞', faceOn?.kind === '人脸识别', `实际 ${faceOn?.kind ?? 'null'}`);
+
+  const codeOverlay =
+    `<div style="position:absolute;left:50px;top:50px;width:340px;height:220px;z-index:2000;
+                 background:#fff;padding:60px 20px">请输入图片中的验证码</div>`;
+  const codeDefault = await withPage(codeOverlay, p => detectManualBlock(p));
+  check('默认：验证码弹窗不阻塞', codeDefault === null, `实际 ${codeDefault?.kind ?? 'null'}`);
+
+  const codeOn = await withPage(codeOverlay, p => detectManualBlock(p, true));
+  check('开启后：验证码弹窗阻塞', codeOn?.kind === '验证码', `实际 ${codeOn?.kind ?? 'null'}`);
+
+  console.log('\n[扫码不受开关影响：始终阻塞]');
+
+  const scanOverlay =
+    `<div style="position:fixed;left:50%;top:30%;width:340px;height:220px;z-index:2000;
+                 background:#fff;padding:60px 20px">请使用手机扫码确认身份</div>`;
+  const scanDefault = await withPage(scanOverlay, p => detectManualBlock(p));
+  check('默认（关闭验证类）：扫码仍阻塞', scanDefault?.kind === '扫码', `实际 ${scanDefault?.kind ?? 'null'}`);
+
+  const scanOn = await withPage(scanOverlay, p => detectManualBlock(p, true));
+  check('开启后：扫码仍阻塞', scanOn?.kind === '扫码', `实际 ${scanOn?.kind ?? 'null'}`);
 
   console.log('\n[video.ts 的三个 evaluate 入口]');
 

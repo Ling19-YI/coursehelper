@@ -9,6 +9,18 @@ export type BlockKind =
   | '安全验证'
   | '弹窗';
 
+/**
+ * 「验证类」弹窗：人脸识别 / 验证码 / 安全验证。
+ *
+ * 这三类的识别误判代价太高——课程正文本身就含这些词（人工智能课的图文
+ * 任务点正文里就有「人脸识别」），误判一次整轮刷课就停摆在等人。
+ * 因此由设置项 autoPauseOnVerify 控制，**默认不因它们暂停**。
+ *
+ * 扫码不在其列，始终暂停：引擎一旦继续动作，二维码会被平台判定为环境变化
+ * 而反复刷新，用户永远扫不上。
+ */
+const VERIFY_KINDS: BlockKind[] = ['人脸识别', '验证码', '安全验证'];
+
 interface BlockInfo {
   kind: BlockKind;
   /** 命中的选择器或文本片段 */
@@ -39,7 +51,7 @@ const LAYER_SELECTORS = [
 // page.evaluate，所以没法抽成共享常量。改关键词时两处都要动。
 
 /** 在单个 frame 内检测 */
-async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
+async function detectInFrame(frame: Frame, allowVerify: boolean): Promise<BlockInfo | null> {
   // 1) 先看可见的弹层容器
   for (const sel of LAYER_SELECTORS) {
     let n = 0;
@@ -53,14 +65,16 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
     let info: { kind: string; matched: string; hint: string } | null = null;
     try {
       // 只检查「可见」的弹层，隐藏的模板不算
-      info = await frame.evaluate((selector) => {
+      info = await frame.evaluate((args: { selector: string; allowVerify: boolean; verifyKinds: string[] }) => {
+        // 字符串数组可以过序列化边界，所以 verifyKinds 由调用方传入；
+        // 但 RegExp 不行，关键词表只能写在函数体内。
         const kw = [
           { re: /扫码|扫描二维码|手机.{0,4}确认|微信扫一扫/, k: '扫码', h: '需要手机扫码确认，请在软件里完成扫码后再继续' },
           { re: /验证码|短信验证|图形验证|拖动滑块|请输入.{0,6}码/, k: '验证码', h: '需要输入验证码，请手动完成后继续' },
           { re: /人脸|活体|面部识别/, k: '人脸识别', h: '需要人脸识别，请手动完成' },
           { re: /安全验证|身份验证|重新验证/, k: '安全验证', h: '触发平台安全验证，请手动完成' },
         ];
-        for (const el of Array.from(document.querySelectorAll(selector))) {
+        for (const el of Array.from(document.querySelectorAll(args.selector))) {
           const r = el.getBoundingClientRect();
           if (r.width < 80 || r.height < 60) continue;
           const cs = getComputedStyle(el);
@@ -69,11 +83,12 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
           // 有文字的弹层才需要人介入；纯遮罩不算
           if (!txt || txt.length < 4) continue;
           for (const x of kw) {
+            if (!args.allowVerify && args.verifyKinds.indexOf(x.k) >= 0) continue;
             if (x.re.test(txt)) return { kind: x.k, matched: txt.slice(0, 40), hint: x.h };
           }
         }
         return null;
-      }, sel);
+      }, { selector: sel, allowVerify, verifyKinds: VERIFY_KINDS });
     } catch {
       info = null;
     }
@@ -107,7 +122,8 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
   // 被 catch 吞掉，真实弹窗一个都认不出来（而且日志里毫无痕迹）。
   // 判据一律内联展开。
   try {
-    const hit = await frame.evaluate((quizSel: string) => {
+    const hit = await frame.evaluate((args: { quizSel: string; allowVerify: boolean; verifyKinds: string[] }) => {
+      const quizSel = args.quizSel;
       const kw = [
         { re: /扫码|扫描二维码|手机.{0,4}确认|微信扫一扫/, k: '扫码', h: '需要手机扫码确认，请在软件里完成扫码后再继续' },
         { re: /验证码|短信验证|图形验证|拖动滑块|请输入.{0,6}码/, k: '验证码', h: '需要输入验证码，请手动完成后继续' },
@@ -139,11 +155,12 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
         if (!txt || txt.length > 120) continue;
 
         for (const x of kw) {
+          if (!args.allowVerify && args.verifyKinds.indexOf(x.k) >= 0) continue;
           if (x.re.test(txt)) return { kind: x.k, matched: txt.slice(0, 40), hint: x.h };
         }
       }
       return null;
-    }, '.ans-videoquiz, #videoquiz-submit');
+    }, { quizSel: '.ans-videoquiz, #videoquiz-submit', allowVerify, verifyKinds: VERIFY_KINDS });
     if (hit) {
       return { kind: hit.kind as BlockKind, matched: hit.matched, hint: hit.hint };
     }
@@ -156,12 +173,20 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
  * 检测当前页面是否被「需要人工处理」的弹窗挡住。
  *
  * 场景：某些课程播放中会弹出手机扫码、验证码、人脸识别。
- * 此时引擎必须停止一切模拟动作（鼠标移动、事件派发、点击播放按钮），
+ * 命中时引擎必须停止一切模拟动作（鼠标移动、事件派发、点击播放按钮），
  * 否则二维码会被判定为环境变化而反复刷新，用户永远扫不上。
+ *
+ * @param allowVerify 是否也因「验证类」（人脸识别/验证码/安全验证）暂停。
+ *   默认 false——这三类的误判代价太高，课程正文就含这些词，
+ *   误判一次整轮刷课就停摆在等人。由设置项 autoPauseOnVerify 控制。
+ *   扫码不受此开关影响，始终暂停。
  */
-export async function detectManualBlock(page: Page): Promise<BlockInfo | null> {
+export async function detectManualBlock(
+  page: Page,
+  allowVerify = false
+): Promise<BlockInfo | null> {
   for (const frame of page.frames()) {
-    const info = await detectInFrame(frame);
+    const info = await detectInFrame(frame, allowVerify);
     if (info) return info;
   }
   return null;

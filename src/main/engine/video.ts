@@ -14,7 +14,7 @@ async function waitBlockGone(page: Page, h: EngineHooks, maxMs = 180000): Promis
   let mins = -1;
   while (Date.now() < end) {
     await h.ctl.sleep(2000);
-    if (await detectManualBlock(page)) {
+    if (await detectManualBlock(page, h.autoPauseOnVerify())) {
       const left = Math.ceil((end - Date.now()) / 60000);
       if (left !== mins) {
         mins = left;
@@ -67,7 +67,7 @@ export function StallGuard() {
 /** 找到视频并确保播放 */
 export async function waitForVideo(page: Page, h: EngineHooks): Promise<boolean> {
   // 刚进页面就弹扫码/验证码时，先等用户处理完再做保活动作
-  const pre = await detectManualBlock(page);
+  const pre = await detectManualBlock(page, h.autoPauseOnVerify());
   if (pre) {
     h.log('warn', `⚠ 检测到${pre.kind}弹窗：${pre.matched}`);
     h.log('warn', `  ${pre.hint}`);
@@ -261,7 +261,7 @@ export async function waitForVideoEnd(page: Page, h: EngineHooks): Promise<Video
     // 这类弹窗对鼠标与焦点变化敏感：一边"保活"一边扫码，
     // 二维码会被判定环境变化而无限刷新，用户永远扫不上。
     // 因此一旦命中，立刻停掉所有模拟动作，静待用户处理完。
-    const block = await detectManualBlock(page);
+    const block = await detectManualBlock(page, h.autoPauseOnVerify());
     if (block) {
       if (announced !== block.kind) {
         announced = block.kind;
