@@ -95,7 +95,9 @@ export class ChaoxingEngine {
    */
   private answerChannel(): AnswerChannel | null {
     const v = this.opts.getVision();
-    if (v?.apiKey) {
+    // baseUrl 和 apiKey 都必须有：只填 key 不填地址时，会拿着空 baseUrl 去
+    // fetch('/chat/completions')，报一句看不出因果的网络错误。
+    if (v?.apiKey && v.baseUrl) {
       return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model, label: '多模态' };
     }
     const dk = this.opts.getDeepseekKey();

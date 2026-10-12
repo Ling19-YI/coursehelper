@@ -20,7 +20,6 @@ export default function Settings() {
   const { message } = App.useApp();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [key, setKey] = useState('');
   const [dataDir, setDataDir] = useState('');
   const [speed, setSpeed] = useState<number>(1);
   const [agentOn, setAgentOn] = useState(false);
@@ -28,7 +27,8 @@ export default function Settings() {
   const [popupOn, setPopupOn] = useState(false);
   const [muted, setMuted] = useState(true);
   const [visionKey, setVisionKey] = useState('');
-  const [visionBaseUrl, setVisionBaseUrl] = useState('https://tokendance.space/gateway/v1');
+  // 不预置地址：公开版本不该把用户导到某个特定服务商（尤其是别人付费的）
+  const [visionBaseUrl, setVisionBaseUrl] = useState('');
   const [visionModel, setVisionModel] = useState('mimo-v2.5');
   const [visionInfo, setVisionInfo] = useState<{ configured: boolean; hint: string }>({
     configured: false,
@@ -38,10 +38,9 @@ export default function Settings() {
 
   useEffect(() => {
     if (a.settings) {
-      setKey(a.settings.deepseekKey ?? '');
       setDataDir(a.settings.dataDir ?? '');
       setSpeed(Number(a.settings.videoSpeed) || 1);
-      setVisionBaseUrl(a.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1');
+      setVisionBaseUrl(a.settings.visionBaseUrl || '');
       setVisionModel(a.settings.visionModel || 'mimo-v2.5');
       setAgentOn(!!a.settings.agentEnabled);
       setCoverRate(
@@ -76,7 +75,6 @@ export default function Settings() {
         setVisionKey('');
       }
       await a.saveSettings({
-        deepseekKey: key.trim(),
         dataDir: dataDir.trim(),
         videoSpeed: speed,
         agentEnabled: agentOn,
@@ -171,7 +169,7 @@ export default function Settings() {
             autoComplete="off"
           />
           <Input
-            placeholder="接口地址"
+            placeholder="接口地址，如 https://api.example.com/v1"
             value={visionBaseUrl}
             onChange={e => setVisionBaseUrl(e.target.value)}
             autoComplete="off"
@@ -190,27 +188,10 @@ export default function Settings() {
       </div>
 
       <div className="cardish">
-        <b>DeepSeek API Key（选填）</b>
-        <div className="muted" style={{ margin: '6px 0 10px' }}>
-          备用通道，仅在上方多模态 Key 为空时才使用。填了多模态就不用填这里。
-        </div>
-        <Input.Password
-          placeholder="sk-..."
-          value={key}
-          onChange={e => setKey(e.target.value)}
-          autoComplete="off"
-        />
-      </div>
-
-      <div className="cardish">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <b>视频中的随堂题弹窗</b>
           <Tooltip title="关闭时遇到弹窗会等 StallGuard 判定卡住后在日志提示；开启后自动答题并继续播放。">
-            <Switch
-              checked={popupOn}
-              onChange={setPopupOn}
-              disabled={!visionInfo.configured && !a.settings?.deepseekKey}
-            />
+            <Switch checked={popupOn} onChange={setPopupOn} disabled={!visionInfo.configured} />
           </Tooltip>
         </div>
         <div className="muted" style={{ margin: '6px 0 10px' }}>

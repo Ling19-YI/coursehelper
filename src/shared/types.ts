@@ -93,7 +93,7 @@ export interface AppSettings {
    * 默认关闭：弹窗出现时视频通常已暂停，自动介入会让「卡住」与「该答题」难以区分。
    */
   answerPopup: boolean;
-  /** 多模态接口地址（OpenAI 兼容） */
+  /** 多模态接口地址（OpenAI 兼容）。留空 = 未配置，需用户自行填写 */
   visionBaseUrl: string;
   /** 多模态模型名 */
   visionModel: string;
@@ -111,7 +111,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   agentEnabled: false,
   answerPopup: false,
   submitCoverRate: 0.8,
-  visionBaseUrl: 'https://tokendance.space/gateway/v1',
+  // 不预置任何接口地址：默认指向某个具体服务商，等于把公开版本的用户
+  // 导到那一家里去（还是对方付费的）。地址和 key 都该由使用者自己填。
+  visionBaseUrl: '',
   // 视觉模型名完全由用户决定，这里只是给个能用的默认值。
   // 唯一要求是支持 OpenAI 兼容的 chat/completions + image_url（原生多模态）。
   // 实测可用：mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v / glm-5v-turbo；
