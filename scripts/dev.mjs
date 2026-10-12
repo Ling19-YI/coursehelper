@@ -36,9 +36,23 @@ if (!(await waitVite())) {
   process.exit(1);
 }
 
-const electron = spawn(electronExe, ['app/dist/main/index.js'], {
+// 必须摘掉 ELECTRON_RUN_AS_NODE：带着它 electron.exe 会以纯 Node 模式启动，
+// require('electron') 返回的是可执行文件路径字符串而不是 API，
+// 于是 app.isPackaged 直接抛
+//   TypeError: Cannot read properties of undefined (reading 'isPackaged')
+// ——报错完全看不出真因，排查成本很高。
+// 从 Electron 应用（VS Code 扩展、各类编辑器/Agent 宿主）里起的终端常带着这个变量。
+const devEnv = { ...process.env, VITE_DEV_SERVER_URL: DEV_URL };
+delete devEnv.ELECTRON_RUN_AS_NODE;
+
+// 允许透传额外的 Electron 开关，例如无 GPU 的环境要 --disable-gpu。
+// 默认不传，不影响正常开发机的硬件加速。
+const extraArgs = (process.env.ELECTRON_EXTRA_ARGS || '').split(/\s+/).filter(Boolean);
+if (extraArgs.length) console.log('[dev] Electron 额外参数:', extraArgs.join(' '));
+
+const electron = spawn(electronExe, [...extraArgs, 'app/dist/main/index.js'], {
   stdio: 'inherit',
-  env: { ...process.env, VITE_DEV_SERVER_URL: DEV_URL },
+  env: devEnv,
 });
 
 function shutdown() {
