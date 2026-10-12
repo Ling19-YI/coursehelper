@@ -35,17 +35,8 @@ const LAYER_SELECTORS = [
   '.el-dialog',
 ];
 
-/** 关键词 → 类型与提示 */
-const KEYWORDS: Array<{ re: RegExp; kind: BlockKind; hint: string }> = [
-  { re: /扫码|扫描二维码|手机.{0,4}确认|微信扫一扫|学号扫码/, kind: '扫码',
-    hint: '需要手机扫码确认，请在软件里完成扫码后再继续' },
-  { re: /验证码|短信验证|图形验证|拖动滑块|请输入.{0,6}码/, kind: '验证码',
-    hint: '需要输入验证码，请手动完成后继续' },
-  { re: /人脸|活体|面部识别/, kind: '人脸识别',
-    hint: '需要人脸识别，请手动完成' },
-  { re: /安全验证|身份验证|重新验证|风险/, kind: '安全验证',
-    hint: '触发平台安全验证，请手动完成' },
-];
+// 关键词表在下面两处 evaluate 里各自内联一份——RegExp 不能跨进程边界传进
+// page.evaluate，所以没法抽成共享常量。改关键词时两处都要动。
 
 /** 在单个 frame 内检测 */
 async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
@@ -67,7 +58,7 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
           { re: /扫码|扫描二维码|手机.{0,4}确认|微信扫一扫/, k: '扫码', h: '需要手机扫码确认，请在软件里完成扫码后再继续' },
           { re: /验证码|短信验证|图形验证|拖动滑块|请输入.{0,6}码/, k: '验证码', h: '需要输入验证码，请手动完成后继续' },
           { re: /人脸|活体|面部识别/, k: '人脸识别', h: '需要人脸识别，请手动完成' },
-          { re: /安全验证|身份验证|重新验证|风险/, k: '安全验证', h: '触发平台安全验证，请手动完成' },
+          { re: /安全验证|身份验证|重新验证/, k: '安全验证', h: '触发平台安全验证，请手动完成' },
         ];
         for (const el of Array.from(document.querySelectorAll(selector))) {
           const r = el.getBoundingClientRect();
@@ -89,41 +80,72 @@ async function detectInFrame(frame: Frame): Promise<BlockInfo | null> {
     if (info) return { kind: info.kind as BlockKind, matched: info.matched, hint: info.hint };
   }
 
-// 2) 弹层没命中时，退化为全页文本关键词匹配（限流类弹窗常没有标准 class）
+// 2) 弹层没命中时，扫描「看起来像覆盖层」的元素。
   //
-  // 必须剔除随堂弹题的文本：题干本身就是页面 DOM 的一部分，「风险」「验证码」
-  // 「人脸」在风险管理、计算机安全这类课程的题目里是普通词汇。混进去会被当成
-  // 平台安全验证，引擎进入等待人工介入的死循环，弹题再也答不到，还会骗用户
-  // 去扫码找根本不存在的验证框。
+  // ⚠️ 这里**不能扫整页 innerText**。
+  // 旧实现读 document.body.innerText 做全文匹配，只摘掉了随堂弹题节点。
+  // 但课程正文本身就可能含这些词——人工智能课 1.4 节图文任务点的正文里
+  // 就有「人脸识别」。扫全文必然把它当成平台弹窗，引擎随即停掉一切模拟动作
+  // 等人工介入，于是整门课（乃至换课后）全部卡死。用户看到的是
+  // 「不知道为什么会判断出人脸识别弹窗」。
   //
-  // ⚠️ 这里**必须用真实 body.innerText，不能 cloneNode**。游离节点不参与布局，
-  // Chromium 下 innerText 退化成 textContent，隐藏弹窗模板的文字全被算进来：
-  //   真实 body.innerText =    715 字，不命中
-  //   clone.innerText     =  99987 字，命中「扫码」
-  // 曾用 clone 版修过一次，直接把这个视频章节判成扫码弹窗，引擎死等 3 分钟。
+  // 判据改成三条同时成立，误判窗口极小：
+  //   · position 为 fixed / absolute —— 弹层脱离文档流，正文是 static
+  //   · 带 z-index —— 覆盖层要压在内容上
+  //   · 文案短 —— 弹层就一句话；正文段落长得多
   //
-  // 另外别试图用 TreeWalker + getComputedStyle 手工复刻 innerText 的可见性
-  // 语义 —— innerText 还会按布局盒模型排除零尺寸元素，手工复刻不准（实测
-  // 手工版 13825 字，仍误命中「扫码」）。正确做法是就地移除再恢复：
-  // 在真实 body 上短暂摘掉弹题节点，读一次 innerText，再放回去。
+  // ⚠️ 用真实 body 的 innerText 语义，不要 cloneNode：游离节点不参与布局，
+  // Chromium 下 innerText 会退化成 textContent，隐藏弹窗模板的文字全被算进来
+  // （实测 715 字 → 99987 字）。曾经用 clone 版修过一次，直接把视频章节
+  // 判成扫码弹窗，引擎死等 3 分钟。
+  //
+  // ⚠️⚠️ evaluate 的函数体里**绝不能定义具名函数**。
+  // 函数会被序列化成字符串发到浏览器执行，而 tsx/esbuild 会给具名函数注入
+  // __name(...) 调用，浏览器侧没有这个符号：
+  //   ReferenceError: __name is not defined
+  // 曾经因为写了个 const isVisible = (el) => {...}，导致整个兜底检测每帧抛错、
+  // 被 catch 吞掉，真实弹窗一个都认不出来（而且日志里毫无痕迹）。
+  // 判据一律内联展开。
   try {
-    const taken = await frame.evaluate((quizSel: string) => {
-      const removed: Array<{ el: Element; next: Node | null }> = [];
-      document.querySelectorAll(quizSel).forEach(el => {
-        const parent = el.parentNode;
-        if (!parent) return;
-        removed.push({ el, next: el.nextSibling });
-        parent.removeChild(el);
-      });
-      const txt = document.body?.innerText || '';
-      // 立刻放回去，别让 DOM 处于被改动过的状态（后续定位要靠真实节点）
-      for (const r of removed) r.el.parentNode?.appendChild(r.el);
-      return txt;
-    }, '.ans-videoquiz, #videoquiz-submit');
-    for (const k of KEYWORDS) {
-      if (k.re.test(taken)) {
-        return { kind: k.kind, matched: (taken.match(k.re) || [''])[0], hint: k.hint };
+    const hit = await frame.evaluate((quizSel: string) => {
+      const kw = [
+        { re: /扫码|扫描二维码|手机.{0,4}确认|微信扫一扫/, k: '扫码', h: '需要手机扫码确认，请在软件里完成扫码后再继续' },
+        { re: /验证码|短信验证|图形验证|拖动滑块|请输入.{0,6}码/, k: '验证码', h: '需要输入验证码，请手动完成后继续' },
+        { re: /人脸|活体|面部识别/, k: '人脸识别', h: '需要人脸识别，请手动完成' },
+        { re: /安全验证|身份验证|重新验证/, k: '安全验证', h: '触发平台安全验证，请手动完成' },
+      ];
+
+      for (const el of Array.from(document.querySelectorAll('div,section,aside,form,dialog'))) {
+        // 随堂弹题不是平台风控，跳过
+        if (el.matches(quizSel) || el.querySelector(quizSel)) continue;
+
+        // 可见且有尺寸（内联，勿抽函数——见上方 __name 的说明）
+        const cs0 = getComputedStyle(el);
+        if (cs0.display === 'none' || cs0.visibility === 'hidden') continue;
+        if (Number(cs0.opacity) === 0) continue;
+        const box = el.getBoundingClientRect();
+        if (box.width < 120 || box.height < 50) continue;
+
+        // 弹层脱离文档流：正文是 static
+        const pos = cs0.position;
+        if (pos !== 'fixed' && pos !== 'absolute') continue;
+
+        // 覆盖层要压在内容上
+        const z = Number(cs0.zIndex);
+        if (!Number.isFinite(z) || z <= 0) continue;
+
+        // 弹层文案短；长文本是正文，不是弹窗
+        const txt = ((el as HTMLElement).innerText || '').trim();
+        if (!txt || txt.length > 120) continue;
+
+        for (const x of kw) {
+          if (x.re.test(txt)) return { kind: x.k, matched: txt.slice(0, 40), hint: x.h };
+        }
       }
+      return null;
+    }, '.ans-videoquiz, #videoquiz-submit');
+    if (hit) {
+      return { kind: hit.kind as BlockKind, matched: hit.matched, hint: hit.hint };
     }
   } catch {}
 
