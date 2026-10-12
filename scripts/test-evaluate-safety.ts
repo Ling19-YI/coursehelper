@@ -297,6 +297,23 @@ async function main() {
     `实际缩进 ${visionLine ? visionLine.length - visionLine.trimStart().length : -1} 空格`
   );
 
+  console.log('\n[总开关真正生效（源码结构守卫）]');
+
+  // 起因：设置页写着「AI 自动答题 —— 总开关。关闭后遇到题目会跳过并记入
+  // 日志，不影响视频播放与文档任务」，但 agentEnabled() 只在 hooks.ts 声明、
+  // 在 index.ts 实现，**没有任何地方读取它** —— 用户关掉之后测验照样自动
+  // 答题，和文案正好相反。这种「死配置」编译器抓不到，只能靠结构断言守。
+  check(
+    'engine 在测验分支检查总开关',
+    /isQuiz && !this\.hooks\.agentEnabled\(\)/.test(idx),
+    ''
+  );
+  check(
+    '随堂弹题受总开关门控',
+    /answerPopup: \(\) => !!opts\.getAgentEnabled\(\) && !!opts\.getAnswerPopup\(\)/.test(idx),
+    ''
+  );
+
   console.log(`\n结果：${pass} 通过，${fail} 失败\n`);
   process.exit(fail > 0 ? 1 : 0);
 }

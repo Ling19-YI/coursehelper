@@ -93,7 +93,9 @@ export class ChaoxingEngine {
       muted: () => opts.getMuted() !== false,
       agentEnabled: () => !!opts.getAgentEnabled(),
       vision: () => opts.getVision(),
-      answerPopup: () => !!opts.getAnswerPopup(),
+      // 受总开关门控：agentEnabled 关掉时随堂弹题也不答。
+      // 设置页把它描述为「总开关」，就得真的管住所有答题路径。
+      answerPopup: () => !!opts.getAgentEnabled() && !!opts.getAnswerPopup(),
       autoPauseOnVerify: () => !!opts.getAutoPauseOnVerify(),
       visionChannel: () => this.answerChannel(),
       deepseekKey: () => opts.getDeepseekKey(),
@@ -463,7 +465,14 @@ export class ChaoxingEngine {
             try {
               // 本轮不再点章节——页面已在本章，靠 scroll2Job 在本页内切换任务点
               const isQuiz = await isQuizPage(this.opts.page);
-              if (isQuiz) {
+              // 设置页的「AI 自动答题」是总开关：关掉就所有题目都不答。
+              // 它曾经只被声明、从未被读取——用户关掉后测验照样自动答题，
+              // 与设置页「关闭后遇到题目会跳过并记入日志」的说明正好相反。
+              if (isQuiz && !this.hooks.agentEnabled()) {
+                summary.skipped++;
+                result = 'quiz_skip';
+                this.log('info', '    - AI 自动答题已关闭，跳过该测验');
+              } else if (isQuiz) {
                 const qr = await handleQuiz(
                   this.opts.page,
                   this.hooks,

@@ -212,7 +212,12 @@ export default function Settings() {
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <b>视频中的随堂题弹窗</b>
           <Tooltip title="关闭时遇到弹窗会等 StallGuard 判定卡住后在日志提示；开启后自动答题并继续播放。">
-            <Switch checked={popupOn} onChange={setPopupOn} disabled={!visionInfo.configured} />
+            {/* 总开关（AI 自动答题）关掉时，这个子开关没有意义 */}
+            <Switch
+              checked={popupOn}
+              onChange={setPopupOn}
+              disabled={!visionInfo.configured || !agentOn}
+            />
           </Tooltip>
         </div>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
