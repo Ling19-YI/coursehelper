@@ -167,6 +167,23 @@ export class VisionSearcher implements Searcher {
   }
 
   private async callApi(content: any[]): Promise<string> {
+    // 推理模型（deepseek-v4.1-flash / mimo-v2.6 等）会把 token 先花在
+    // reasoning_content 上，预算不够时 content 整段为空。那不是「答不出来」，
+    // 是预算不够——加大预算重试一次，别把整批题一起废掉。
+    //
+    // 实测 deepseek-v4.1-flash 识别一张小图只用约 124 输出 token（内含
+    // 183 字推理），800 余量充足；这一步纯属防御复杂题干把推理拉长。
+    try {
+      return await this.callOnce(content, 800);
+    } catch (e: any) {
+      const m = String(e?.message || e);
+      if (!m.includes('reasoning_content')) throw e;
+      this.o.log?.('warn', '  ⚠ 推理占满 token，加倍预算重试一次');
+      return await this.callOnce(content, 3200);
+    }
+  }
+
+  private async callOnce(content: any[], maxTokens: number): Promise<string> {
     const ch = this.o.channel;
     const messages = [
       { role: 'system', content: SYSTEM },
@@ -183,7 +200,7 @@ export class VisionSearcher implements Searcher {
       ...extra,
     });
 
-    let resp = await this.post(payload({ temperature: 0, max_tokens: 800 }));
+    let resp = await this.post(payload({ temperature: 0, max_tokens: maxTokens }));
     if (resp.status === 400) resp = await this.post(payload({}));
 
     if (!resp.ok) {
