@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page, Frame } from 'playwright';
 import { forcePlay, wakeUp, installPauseSpy, setVideoRate } from './keepalive';
 import { answerVideoPopup } from './videoQuiz';
 import type { EngineHooks } from './hooks';
@@ -51,6 +51,45 @@ export function lastPickedVideoSrc(): string | null {
   return lastPickedSrc;
 }
 
+/**
+ * 给「已完成任务点」里的 iframe 打上 data-ch-finished。
+ *
+ * 平台自己在知识卡容器上写 `ans-job-finished`（实测 class 形如
+ * `ans-attach-ct videoContainer ans-job-finished`），这是最权威的完成信号：
+ * 比时长容差可靠（平台 90% 就算过，容差对不齐就来回打架），
+ * 也比 src 比对可靠（src 带会话 token，页面一重载就变，集合对不上）。
+ *
+ * 打标后由 probeVideo 跳过这些 frame，从根上避免「已完成的任务点被反复重播」。
+ */
+async function tagFinishedJobFrames(page: Page): Promise<void> {
+  for (const frame of page.frames()) {
+    try {
+      await frame.evaluate(() => {
+        document.querySelectorAll('iframe').forEach(f => {
+          const box = f.closest(
+            '[class*="ans-attach-ct"], [class*="ans-job-wrap"], [class*="ans-job"]'
+          );
+          const done = !!box && String(box.className).includes('ans-job-finished');
+          if (done) f.setAttribute('data-ch-finished', '1');
+          else f.removeAttribute('data-ch-finished');
+        });
+      });
+    } catch {}
+  }
+}
+
+/** 该 frame 对应的任务点是否已被平台标记完成 */
+async function isFinishedFrame(frame: Frame): Promise<boolean> {
+  try {
+    const fe = await frame.frameElement();
+    if (!fe) return false;
+    return (await fe.getAttribute('data-ch-finished')) === '1';
+  } catch {
+    // 顶层 frame 没有 frameElement，判定为非完成
+    return false;
+  }
+}
+
 /** 等待视频元数据（duration）就绪的上限 */
 const VIDEO_META_TIMEOUT_MS = 8000;
 
@@ -100,6 +139,9 @@ export async function waitForVideo(
     if (!gone) return false;
     h.log('ok', '  ✓ 弹窗已处理，继续');
   }
+
+  // 先按平台的权威标记标出「已完成的任务点」，probeVideo 会跳过它们
+  await tagFinishedJobFrames(page);
 
   const want = Math.min(2, Math.max(1, h.speed() || 1));
   await setVideoRate(page, want);
@@ -177,6 +219,8 @@ async function hasVideoElement(page: Page): Promise<boolean> {
 async function probeVideo(page: Page, h: EngineHooks, skipSrcs?: Set<string>) {
   const skip = skipSrcs && skipSrcs.size ? Array.from(skipSrcs) : [];
   for (const frame of page.frames()) {
+    // 平台已标记完成的 task point，其视频不再驱动
+    if (await isFinishedFrame(frame)) continue;
     try {
       // 容差要作为参数传进来：evaluate 的函数体是被序列化后送到浏览器执行的，
       // 引用不到模块级常量（会像 __name 那样直接 ReferenceError）。
