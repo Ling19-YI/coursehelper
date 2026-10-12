@@ -321,104 +321,146 @@ export class ChaoxingEngine {
 
           const name = clean(chapter.name);
           this.currentChapter = name;
-          this.log('info', `\n[${doneHere() + 1}/${todoable.length}] ${name.substring(0, 50)}`);
+          // 一个 chapter_item 可能含多个任务点，日志里带上待完成数才有可读性
+          const jobNote = chapter.jobCount > 1 ? `（含 ${chapter.jobCount} 个任务点）` : '';
+          this.log(
+            'info',
+            `\n[${doneHere() + 1}/${todoable.length}] ${name.substring(0, 50)}${jobNote}`
+          );
 
-          let result: ChapterResult = 'error';
-          try {
-            const entered = await clickChapter(this.opts.page, this.hooks, chapter);
-            if (!entered) {
-              // 点不进去就别继续：后面所有步骤都是对着上一个页面操作，
-              // 会把结果记成"已完成"，造成静默的数据污染。
+          // ── 一章多任务点：反复进入同一个条目，直到待完成数归零 ──
+          // 平台每次点击只会打开第一个未完成的任务点，刷完必须再点同一个条目。
+          // 以前只点一次就跳到下一个章节，剩下的任务点永远不访问。
+          let rounds = 0;
+          const MAX_ROUNDS = 20;
+          let lastPending = chapter.pendingCount;
+
+          for (;;) {
+            if (++rounds > MAX_ROUNDS) {
+              this.log('warn', `    ⚠ 已重入 ${MAX_ROUNDS} 次仍未完成，放弃该章节`);
               summary.skipped++;
-              result = 'enter_failed';
-              this.log('warn', `    ⚠ 未能进入该任务点，跳过`);
-              this.emit({
-                type: 'chapter',
-                index: ++processed,
-                total: todoable.length,
-                name,
-                result,
-                ts: Date.now(),
-              });
-              emitProgress();
-              continue;
+              break;
             }
 
-            const isQuiz = await isQuizPage(this.opts.page);
-            if (isQuiz) {
-              const qr = await handleQuiz(
-                this.opts.page,
-                this.hooks,
-                this.opts.getDeepseekKey(),
-                this.answerChannel(),
-                { tiku: this.tiku, submitCoverRate: this.opts.getSubmitCoverRate() }
-              );
-              if (qr.success) {
-                this.store.markChapterDone(ensureProgress(), chapter.onclick);
-                summary.completed++;
-                result = 'quiz_ok';
-                this.log('ok', `    ✓ 答题完成 (${qr.answered} 题)`);
-              } else {
+            let result: ChapterResult = 'error';
+            try {
+              const entered = await clickChapter(this.opts.page, this.hooks, chapter);
+              if (!entered) {
+                // 点不进去就别继续：后面所有步骤都是对着上一个页面操作，
+                // 会把结果记成"已完成"，造成静默的数据污染。
                 summary.skipped++;
-                result = 'quiz_skip';
-                this.log('warn', `    ⚠ 答题未完成，跳过（覆盖 ${Math.round(qr.coverage * 100)}%）`);
+                result = 'enter_failed';
+                this.log('warn', `    ⚠ 未能进入该任务点，跳过`);
+                break;
               }
-              await goBackToCourse(this.opts.page, this.hooks);
-            } else {
-              const hasVideo = await waitForVideo(this.opts.page, this.hooks);
-              if (!hasVideo) {
-                // 文档/文本任务点：渐进滚动到底，再用平台"已完成"标记校验
-                const doc = await handleDocument(this.opts.page, this.hooks);
+
+              const isQuiz = await isQuizPage(this.opts.page);
+              if (isQuiz) {
+                const qr = await handleQuiz(
+                  this.opts.page,
+                  this.hooks,
+                  this.opts.getDeepseekKey(),
+                  this.answerChannel(),
+                  { tiku: this.tiku, submitCoverRate: this.opts.getSubmitCoverRate() }
+                );
+                if (qr.success) {
+                  this.store.markChapterDone(ensureProgress(), chapter.onclick);
+                  summary.completed++;
+                  result = 'quiz_ok';
+                  this.log('ok', `    ✓ 答题完成 (${qr.answered} 题)`);
+                } else {
+                  summary.skipped++;
+                  result = 'quiz_skip';
+                  this.log(
+                    'warn',
+                    `    ⚠ 答题未完成，跳过（覆盖 ${Math.round(qr.coverage * 100)}%）`
+                  );
+                }
                 await goBackToCourse(this.opts.page, this.hooks);
-                if (doc === 'scrolled') {
-                  const list = await getChapters(this.opts.page);
-                  const found = list.find(c => c.onclick === chapter.onclick);
-                  if (found?.isCompleted) {
-                    this.store.markChapterDone(ensureProgress(), chapter.onclick);
-                    summary.completed++;
-                    result = 'doc_done';
-                    this.log('ok', '    ✓ 文档任务点完成（平台已确认）');
+              } else {
+                const hasVideo = await waitForVideo(this.opts.page, this.hooks);
+                if (!hasVideo) {
+                  // 文档/文本任务点：渐进滚动到底，再用平台"已完成"标记校验
+                  const doc = await handleDocument(this.opts.page, this.hooks);
+                  await goBackToCourse(this.opts.page, this.hooks);
+                  if (doc === 'scrolled') {
+                    const list = await getChapters(this.opts.page);
+                    const found = list.find(c => c.onclick === chapter.onclick);
+                    if (found?.isCompleted) {
+                      this.store.markChapterDone(ensureProgress(), chapter.onclick);
+                      summary.completed++;
+                      result = 'doc_done';
+                      this.log('ok', '    ✓ 文档任务点完成（平台已确认）');
+                    } else {
+                      summary.skipped++;
+                      result = 'no_video';
+                      this.log('warn', '    ⚠ 文档已浏览但平台未标记完成，下次重试');
+                    }
                   } else {
                     summary.skipped++;
                     result = 'no_video';
-                    this.log('warn', '    ⚠ 文档已浏览但平台未标记完成，下次重试');
+                    this.log('info', '    - 无视频/无文档，跳过');
                   }
                 } else {
-                  summary.skipped++;
-                  result = 'no_video';
-                  this.log('info', '    - 无视频/无文档，跳过');
+                  const r = await waitForVideoEnd(this.opts.page, this.hooks);
+                  if (r === 'completed') {
+                    this.store.markChapterDone(ensureProgress(), chapter.onclick);
+                    summary.completed++;
+                    result = 'completed';
+                  } else {
+                    summary.skipped++;
+                    result = r;
+                    this.log('warn', `    ⚠ 跳过（${r}）`);
+                  }
+                  await goBackToCourse(this.opts.page, this.hooks);
                 }
-              } else {
-                const r = await waitForVideoEnd(this.opts.page, this.hooks);
-                if (r === 'completed') {
-                  this.store.markChapterDone(ensureProgress(), chapter.onclick);
-                  summary.completed++;
-                  result = 'completed';
-                } else {
-                  summary.skipped++;
-                  result = r;
-                  this.log('warn', `    ⚠ 跳过（${r}）`);
-                }
-                await goBackToCourse(this.opts.page, this.hooks);
               }
+            } catch (e) {
+              if (this.ctl.isStopped) throw e;
+              const msg = String((e as any)?.message || e);
+              this.log('error', msg);
+              this.emit({ type: 'error', message: msg, ts: Date.now() });
+              result = 'error';
             }
-          } catch (e) {
-            if (this.ctl.isStopped) throw e;
-            const msg = String((e as any)?.message || e);
-            this.log('error', msg);
-            this.emit({ type: 'error', message: msg, ts: Date.now() });
-            result = 'error';
-          }
 
-          this.emit({
-            type: 'chapter',
-            index: ++processed,
-            total: todoable.length,
-            name,
-            result,
-            ts: Date.now(),
-          });
-          emitProgress();
+            this.emit({
+              type: 'chapter',
+              index: ++processed,
+              total: todoable.length,
+              name,
+              result,
+              ts: Date.now(),
+            });
+            emitProgress();
+
+            // ── 判断这一章还有没有剩下的任务点 ──
+            if (this.ctl.isStopped) break;
+            const fresh = await getChapters(this.opts.page);
+            const now_ = fresh.find(c => c.onclick === chapter.onclick);
+            if (!now_) {
+              // 目录里没这个条目了（可能被平台折叠/刷新），当作处理完
+              break;
+            }
+            if (now_.isCompleted || now_.pendingCount <= 0) {
+              if (rounds > 1 || chapter.jobCount > 1) {
+                this.log('ok', `    ✓ 本章 ${chapter.jobCount} 个任务点全部完成`);
+              }
+              break;
+            }
+            if (now_.pendingCount >= lastPending) {
+              // 待完成数没下降——再点也只会打开同一个任务点，别死循环
+              this.log(
+                'warn',
+                `    ⚠ 待完成数仍为 ${now_.pendingCount}（未下降），停止重入该章节`
+              );
+              break;
+            }
+            lastPending = now_.pendingCount;
+            this.log(
+              'info',
+              `    → 本章还剩 ${now_.pendingCount} 个任务点，继续处理下一个`
+            );
+          }
         }
         emitProgress();
       }

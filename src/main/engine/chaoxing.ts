@@ -12,6 +12,14 @@ export interface Chapter {
   name: string;
   onclick: string;
   isCompleted: boolean;
+  /**
+   * 该章节包含的任务点总数（DOM: input.knowledgeJobCount）。
+   * 一个 chapter_item 是「任务点分组」，不是单个任务点——
+   * 点它只会进入第一个未完成的，剩下的要再点同一个条目。
+   */
+  jobCount: number;
+  /** 待完成的任务点数（DOM: span.catalog_points_yi）。0 = 本节已全部完成 */
+  pendingCount: number;
 }
 
 interface RawCourse {
@@ -441,6 +449,15 @@ function findChapterFrame(page: Page): Frame | null {
   return frames[1] ?? null;
 }
 
+/**
+ * 读取章节目录。
+ *
+ * 一个 chapter_item 对应一个「章节」，里面可能含多个任务点。DOM 里：
+ *   input.knowledgeJobCount      → 任务点总数
+ *   span.catalog_points_yi       → 待完成数（随完成递减，0 = 刷完）
+ * 这两个数必须读出来，否则「一章多任务点」只会刷第一个——
+ * 引擎遍历到下一个 chapter_item 就再也回不来了。
+ */
 export async function getChapters(page: Page): Promise<Chapter[]> {
   const frame = findChapterFrame(page);
   if (!frame) return [];
@@ -448,16 +465,27 @@ export async function getChapters(page: Page): Promise<Chapter[]> {
     els.map(el => {
       const html: string = el.outerHTML || '';
       const text: string = el.innerText || '';
+
+      const jobInput = el.querySelector('input.knowledgeJobCount') as HTMLInputElement | null;
+      const jobCount = Number(jobInput?.value) || 0;
+      const pendingEl = el.querySelector('.catalog_points_yi');
+      const pendingCount = Number((pendingEl?.textContent || '').trim()) || 0;
+
+      // 平台完成标记：已完成图标 icon_yiwanc / 文本"已完成" / completed 类名
+      // 另外「有待完成数为 0 但确实有任务点」同样算完成——老判断漏了这种情况
+      const markedDone =
+        html.includes('icon_yiwanc') ||
+        text.includes('已完成') ||
+        String(el.className).includes('completed') ||
+        String(el.className).includes('finished') ||
+        String(el.className).includes('done');
+
       return {
         name: text.trim().substring(0, 60),
         onclick: el.getAttribute('onclick') || '',
-        // 平台完成标记：已完成图标 icon_yiwanc / 文本"已完成" / completed 类名
-        isCompleted:
-          html.includes('icon_yiwanc') ||
-          text.includes('已完成') ||
-          String(el.className).includes('completed') ||
-          String(el.className).includes('finished') ||
-          String(el.className).includes('done'),
+        jobCount,
+        pendingCount,
+        isCompleted: markedDone || (jobCount > 0 && pendingCount === 0),
       };
     })
   );
