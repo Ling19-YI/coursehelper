@@ -64,15 +64,19 @@ export function lastPickedVideoSrc(): string | null {
 async function tagFinishedJobFrames(page: Page): Promise<void> {
   for (const frame of page.frames()) {
     try {
+      // 用 for 循环而不是 forEach：evaluate 的函数体里一律不写函数字面量
+      // （见 markTargetVideo 里关于 __name 的说明）
       await frame.evaluate(() => {
-        document.querySelectorAll('iframe').forEach(f => {
+        const ifr = document.querySelectorAll('iframe');
+        for (let i = 0; i < ifr.length; i++) {
+          const f = ifr[i];
           const box = f.closest(
             '[class*="ans-attach-ct"], [class*="ans-job-wrap"], [class*="ans-job"]'
           );
           const done = !!box && String(box.className).includes('ans-job-finished');
           if (done) f.setAttribute('data-ch-finished', '1');
           else f.removeAttribute('data-ch-finished');
-        });
+        }
       });
     } catch {}
   }
@@ -90,8 +94,136 @@ async function isFinishedFrame(frame: Frame): Promise<boolean> {
   }
 }
 
+/**
+ * 「当前目标视频」的 DOM 属性名。
+ *
+ * 必须有唯一定义。旧实现有三套选法，结论不一致：
+ *   1. probeVideo  —— 过滤可见/未播完/已跳过 后取第一个
+ *   2. forcePlay   —— `document.querySelector('video')`，不做任何过滤
+ *   3. 保活 ticker —— `querySelectorAll('video')` 全量拉起
+ * 同一章节页里并列多个任务点视频时（实机见过两个 ananas/modules/video
+ * iframe），三者各选各的：一个被驱动，另一个被 ticker 也拉起来，两个同时
+ * 往前跑——用户看到的就是「一章两个视频，上下来回切换」。
+ *
+ * 做成 DOM 属性而非模块变量：页面重载/iframe 重挂后标记自然消失，
+ * 不需要额外的失效判断，也不会跨章节串味。
+ */
+const TARGET_ATTR = 'data-ch-target';
+
 /** 等待视频元数据（duration）就绪的上限 */
 const VIDEO_META_TIMEOUT_MS = 8000;
+
+/**
+ * 锁定本章「该播的那一个视频」，返回它的 src（没锁定到返回 null）。
+ *
+ * 已锁定的目标仍然有效则**沿用**——重选会让同页两个任务点的视频互相抢，
+ * 每轮换一个，画面来回切。目标已播完 / 已进 skipList / 平台已标记完成时才
+ * 释放并重选。
+ *
+ * 选定后立刻暂停同页其它视频：它们会被保活 ticker 一并拉起，两个同时播
+ * 既浪费带宽，也可能被平台记成异常。
+ */
+export async function markTargetVideo(
+  page: Page,
+  h: EngineHooks,
+  skipSrcs?: Set<string>
+): Promise<{ src: string } | null> {
+  const skip = skipSrcs && skipSrcs.size ? Array.from(skipSrcs) : [];
+  for (const frame of page.frames()) {
+    // 平台已标记完成的任务点，其视频不再驱动
+    if (await isFinishedFrame(frame)) continue;
+    try {
+      // ⚠️ evaluate 的函数体是被序列化后送到浏览器执行的，两条铁律：
+      //   1. 引用不到模块级常量（容差必须作为参数传进来）
+      //   2. 不能定义具名函数 —— tsx/esbuild 会注入 __name(...)，
+      //      浏览器里没有这个符号 → ReferenceError，而异常常被外层 catch
+      //      吞掉，表现为功能整体静默失效。所以这里一律用 for 循环。
+      const hit = await frame.evaluate(
+        (args: { skipList: string[]; tolSec: number }) => {
+          const all = document.querySelectorAll('video');
+          const usable: HTMLVideoElement[] = [];
+          for (let i = 0; i < all.length; i++) {
+            const v = all[i] as HTMLVideoElement;
+            const r = v.getBoundingClientRect();
+            if (r.width >= 100 && r.height >= 60) usable.push(v);
+          }
+          if (!usable.length) return null;
+
+          // ① 已锁定的目标优先
+          let target: HTMLVideoElement | null = null;
+          for (let i = 0; i < usable.length; i++) {
+            if (usable[i].getAttribute('data-ch-target') === '1') {
+              target = usable[i];
+              break;
+            }
+          }
+
+          // ② 目标是否还有效
+          if (target) {
+            const src0 = target.currentSrc || target.src || '';
+            const stale =
+              (!!src0 && args.skipList.indexOf(src0) >= 0) ||
+              target.ended ||
+              (target.duration > 0 &&
+                target.currentTime >= target.duration - args.tolSec);
+            if (stale) {
+              target.removeAttribute('data-ch-target');
+              target = null;
+            }
+          }
+
+          // ③ 没锁定就重选
+          if (!target) {
+            for (let i = 0; i < usable.length; i++) {
+              const v = usable[i];
+              const s = v.currentSrc || v.src || '';
+              if (s && args.skipList.indexOf(s) >= 0) continue;
+              if (v.ended) continue;
+              if (v.duration > 0 && v.currentTime >= v.duration - args.tolSec) continue;
+              target = v;
+              break;
+            }
+            if (!target) return null;
+            for (let i = 0; i < usable.length; i++) {
+              const v = usable[i];
+              if (v === target) continue;
+              v.removeAttribute('data-ch-target');
+              try {
+                v.pause();
+              } catch (e) {}
+            }
+            target.setAttribute('data-ch-target', '1');
+          }
+
+          return { src: target.currentSrc || target.src || '' };
+        },
+        { skipList: skip, tolSec: VIDEO_DONE_TOLERANCE_SEC }
+      );
+      if (hit) return hit;
+    } catch (e) {
+      rethrowIfStopped(h, e);
+    }
+  }
+  return null;
+}
+
+/**
+ * 读「已锁定目标」的状态并保活（暂停则拉起）；没有目标时返回 null。
+ *
+ * 与 probeVideo 的区别是**不重选**：waitForVideoEnd 期间目标必须稳定，
+ * 中途换目标等于把已经播的作废、从头再播一遍——那正是要修的「反复重播」。
+ */
+async function readTargetState(page: Page, h: EngineHooks) {
+  for (const frame of page.frames()) {
+    try {
+      const st = await forcePlay(frame, h.muted(), true);
+      if (st) return { state: st, frame };
+    } catch (e) {
+      rethrowIfStopped(h, e);
+    }
+  }
+  return null;
+}
 
 function rethrowIfStopped(h: EngineHooks, e: unknown) {
   if (h.ctl.isStopped) throw e;
@@ -159,23 +291,26 @@ export async function waitForVideo(
 
   while (!h.ctl.isStopped) {
     last = await probeVideo(page, h, skipSrcs);
-    if (last && last.d > 0) {
-      const actual = last.rate || 1;
-      if (last.paused) {
-        const woke = await wakeUp(page, page.frames()[0], h.muted());
-        if (woke) last = woke;
+    if (last && last.state.d > 0) {
+      const actual = last.state.rate || 1;
+      if (last.state.paused) {
+        // 唤醒要用**目标所在的 frame**，不是 frames()[0]。
+        // 目标在子 iframe 里（实机是 top>if0>if0），对顶层 frame 发唤醒
+        // 事件它收不到，视频照样停着。
+        const woke = await wakeUp(page, last.frame, h.muted());
+        if (woke) last = { state: woke, frame: last.frame };
       }
-      const eta = want > 1 ? `，约 ${Math.round(last.d / actual / 60)} 分钟看完` : '';
+      const eta = want > 1 ? `，约 ${Math.round(last.state.d / actual / 60)} 分钟看完` : '';
       if (want > 1 && actual < want - 0.01) {
         h.log('warn', `⚠ 平台把倍速限制在 ${actual}x（目标 ${want}x）`);
       } else {
-        h.log('ok', `✓ 视频: ${Math.round(last.d)}s（${actual}x${eta}）`);
+        h.log('ok', `✓ 视频: ${Math.round(last.state.d)}s（${actual}x${eta}）`);
       }
       return true;
     }
     // duration 还没出来，但播放头已经在动，说明确实是视频，只是元数据慢
-    if (last && last.ct > 0) {
-      h.log('ok', `✓ 视频: 正在播放（${last.ct.toFixed(1)}s，${last.rate || 1}x）`);
+    if (last && last.state.ct > 0) {
+      h.log('ok', `✓ 视频: 正在播放（${last.state.ct.toFixed(1)}s，${last.state.rate || 1}x）`);
       return true;
     }
     if (Date.now() > deadline) break;
@@ -207,57 +342,26 @@ async function hasVideoElement(page: Page): Promise<boolean> {
 }
 
 /**
- * 取第一个「还需要播」的可见视频的播放状态。
+ * 选定目标视频并驱动播放，返回它的状态。
  *
- * 关键：跳过已经播完的。
- * 同一章节页里会同时挂多个任务点 iframe（实机见过两个
- * ananas/modules/video/index.html 并列），先播完的那个仍留在 DOM 里且依旧
- * 「可见」。如果不过滤，第二次探测还是会选中它，于是同一个视频被反复拿来
- * 判断，同章节的后续任务点永远轮不到——用户看到的就是「一章多任务点
- * 只刷第一个」。
+ * 选谁由 markTargetVideo 决定——「现在在播哪个视频」必须与 forcePlay、保活
+ * ticker 共用同一份定义（见 TARGET_ATTR 的注释）。旧实现在这里另写了一套
+ * 过滤规则，与 forcePlay 的「无条件取第一个」结论不一致，于是两个视频互相抢。
  */
 async function probeVideo(page: Page, h: EngineHooks, skipSrcs?: Set<string>) {
-  const skip = skipSrcs && skipSrcs.size ? Array.from(skipSrcs) : [];
+  const picked = await markTargetVideo(page, h, skipSrcs);
+  if (!picked) return null;
+  lastPickedSrc = picked.src || null;
+
+  // 目标标记打在哪个 frame 的 video 上，就驱动那个 frame
   for (const frame of page.frames()) {
-    // 平台已标记完成的 task point，其视频不再驱动
-    if (await isFinishedFrame(frame)) continue;
     try {
-      // 容差要作为参数传进来：evaluate 的函数体是被序列化后送到浏览器执行的，
-      // 引用不到模块级常量（会像 __name 那样直接 ReferenceError）。
-      const s = await frame.evaluate(
-        (args: { skipList: string[]; tolSec: number }) => {
-          for (const el of Array.from(document.querySelectorAll('video'))) {
-            const v = el as HTMLVideoElement;
-            const r = v.getBoundingClientRect();
-            if (r.width < 100 || r.height < 60) continue;
-
-            // 本章已经处理完的，按 src 精确排除
-            const src = v.currentSrc || v.src || '';
-            if (src && args.skipList.indexOf(src) >= 0) continue;
-
-            // 已结束 / 播放头已到末尾 → 这个任务点不用再管，看下一个。
-            // 容差与 waitForVideoEnd 的完成判定共用，否则会来回打架。
-            if (v.ended) continue;
-            if (v.duration > 0 && v.currentTime >= v.duration - args.tolSec) continue;
-
-            return {
-              ct: v.currentTime,
-              d: v.duration || 0,
-              paused: v.paused,
-              ended: v.ended,
-              rate: v.playbackRate,
-              src,
-            };
-          }
-          return null;
-        },
-        { skipList: skip, tolSec: VIDEO_DONE_TOLERANCE_SEC }
+      const has = await frame.evaluate(
+        () => !!document.querySelector('video[data-ch-target="1"]')
       );
-      if (s) {
-        lastPickedSrc = s.src || null;
-        // 找到可见视频就驱动它播放并应用倍速
-        return await forcePlay(frame, h.muted());
-      }
+      if (!has) continue;
+      const st = await forcePlay(frame, h.muted());
+      if (st) return { state: st, frame };
     } catch (e) {
       rethrowIfStopped(h, e);
     }
@@ -350,13 +454,20 @@ export async function gotoUnfinishedJob(page: Page): Promise<boolean> {
 }
 
 /** 轮询直到视频结束 / 卡住 / 异常（3s 一次，45s 无进度判定卡住） */
-export async function waitForVideoEnd(page: Page, h: EngineHooks): Promise<VideoResult> {
+export async function waitForVideoEnd(
+  page: Page,
+  h: EngineHooks,
+  skipSrcs?: Set<string>
+): Promise<VideoResult> {
   const ctl = h.ctl;
   const stall = StallGuard();
   let iteration = 0;
   let lastUrl = page.url();
   // 已提示过的弹窗类型，避免每 3 秒刷一次同样的日志
   let announced: string | null = null;
+  // 进入本函数时的目标 src。目标标记万一丢失（iframe 重挂或平台已做完移除），
+  // 重选后若是另一个视频，说明当前任务点已经了结，不必再等。
+  const enteredSrc = lastPickedSrc;
 
   while (true) {
     ctl.throwIfStopped();
@@ -428,54 +539,57 @@ export async function waitForVideoEnd(page: Page, h: EngineHooks): Promise<Video
       }
     }
 
-    let videoFound = false;
-    for (const frame of page.frames()) {
-      ctl.throwIfStopped();
-      let s = null;
+    // 只读「已锁定目标」的状态，**不重选**。
+    // 旧实现每轮遍历所有 frame 调 forcePlay，选中的可能不是 probeVideo 选定的
+    // 那一个，且保活 ticker 又会把页面上所有 video 都拉起来——两三个视频同时
+    // 往前跑，界面上就是「上下来回切换」。现在目标由 data-ch-target 唯一确定。
+    let found = await readTargetState(page, h);
+    if (!found) {
+      // 目标标记丢了：可能是 iframe 重挂（重选会选回同一个，继续播），
+      // 也可能是平台已把该任务点做完并移走（这时应视为本节完成）。
+      const repicked = await probeVideo(page, h, skipSrcs);
+      if (!repicked) {
+        h.log('warn', '⚠ 视频元素消失');
+        return 'unexpected';
+      }
+      if (enteredSrc && lastPickedSrc && lastPickedSrc !== enteredSrc) {
+        h.log('ok', '✓ 当前任务点已了结（平台已切到下一个）');
+        return 'completed';
+      }
+      found = repicked;
+    }
+
+    let s = found.state;
+    if (s.paused) {
+      h.log('info', `⏸ 暂停 (focus=${s.focus}, vis=${s.vis}${s.err ? ', ' + s.err : ''}) → 唤醒`);
       try {
-        s = await forcePlay(frame, h.muted());
+        s = (await wakeUp(page, found.frame, h.muted())) || s;
       } catch (e) {
         rethrowIfStopped(h, e);
       }
-      if (!s) continue;
-      videoFound = true;
-
-      if (s.paused) {
-        h.log('info', `⏸ 暂停 (focus=${s.focus}, vis=${s.vis}${s.err ? ', ' + s.err : ''}) → 唤醒`);
-        try {
-          s = (await wakeUp(page, frame, h.muted())) || s;
-        } catch (e) {
-          rethrowIfStopped(h, e);
-        }
-      }
-
-      h.onTick({ ct: s.ct, d: s.d, paused: s.paused, rate: s.rate });
-      h.log('info', `[${iteration}] ${s.ct.toFixed(2)}/${Math.round(s.d)}s paused=${s.paused} rate=${s.rate}x`);
-
-if (s.ended || (s.d > 0 && s.ct >= s.d - VIDEO_DONE_TOLERANCE_SEC)) {
-        h.log('ok', '✓ 视频播放完成');
-        return 'completed';
-      }
-
-      const st = stall.observe(s.ct);
-      if (!st.tick && iteration % 3 === 0 && st.stuck !== undefined) {
-        const d = await h.diag('stall');
-        if (d) h.log('info', `[diag] ${d}`);
-      }
-      if (st.stuck) {
-        h.log('warn', '⚠ 卡住（45s 无进度）');
-        h.log('warn', '  常见原因：视频中途弹出随堂题需手动作答，或平台限流/弹窗遮挡');
-        const d = await h.diag('stuck');
-        if (d) h.log('info', `[diag] ${d}`);
-        return 'stuck';
-      }
-      break;
     }
 
-    if (!videoFound) {
-      h.log('warn', '⚠ 视频元素消失');
-      return 'unexpected';
+    h.onTick({ ct: s.ct, d: s.d, paused: s.paused, rate: s.rate });
+    h.log('info', `[${iteration}] ${s.ct.toFixed(2)}/${Math.round(s.d)}s paused=${s.paused} rate=${s.rate}x`);
+
+    if (s.ended || (s.d > 0 && s.ct >= s.d - VIDEO_DONE_TOLERANCE_SEC)) {
+      h.log('ok', '✓ 视频播放完成');
+      return 'completed';
     }
+
+    const st = stall.observe(s.ct);
+    if (!st.tick && iteration % 3 === 0 && st.stuck !== undefined) {
+      const d = await h.diag('stall');
+      if (d) h.log('info', `[diag] ${d}`);
+    }
+    if (st.stuck) {
+      h.log('warn', '⚠ 卡住（45s 无进度）');
+      h.log('warn', '  常见原因：视频中途弹出随堂题需手动作答，或平台限流/弹窗遮挡');
+      const d = await h.diag('stuck');
+      if (d) h.log('info', `[diag] ${d}`);
+      return 'stuck';
+    }
+
     await ctl.sleep(3000);
   }
 }

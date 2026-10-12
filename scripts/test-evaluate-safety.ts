@@ -23,7 +23,9 @@ import {
   readUnfinishedCount,
   detectDailyLimit,
   gotoUnfinishedJob,
+  markTargetVideo,
 } from '../src/main/engine/video';
+import { forcePlay, SPY_JS } from '../src/main/engine/keepalive';
 import { TaskControl } from '../src/main/engine/control';
 import { handleDocument } from '../src/main/engine/document';
 import type { EngineHooks } from '../src/main/engine/hooks';
@@ -208,6 +210,65 @@ async function main() {
     p => handleDocument(p, makeHooks())
   );
   check('大图（拖拽型）也返回 scrolled', docImg === 'scrolled', `实际 ${docImg}`);
+
+  console.log('\n[目标视频唯一：markTargetVideo / forcePlay]');
+
+  // 两个并列的可见 video —— 模拟「一章两个任务点」（实机是两个
+  // ananas/modules/video iframe 同时挂在同一页里）
+  const twoVids = `
+    <video id="v1" src="https://example.com/a.mp4" style="display:block;width:400px;height:240px"></video>
+    <video id="v2" src="https://example.com/b.mp4" style="display:block;width:400px;height:240px"></video>`;
+  const A = 'https://example.com/a.mp4';
+
+  const r1 = await withPage(twoVids, async p => {
+    await markTargetVideo(p, makeHooks());
+    const n = await p.$$eval('video[data-ch-target="1"]', (els: any[]) => els.length);
+    const id = await p.$eval('video[data-ch-target="1"]', (e: any) => e.id).catch(() => null);
+    return { n, id };
+  });
+  check('两个并列视频只标记一个', r1.n === 1, `实际标记 ${r1.n} 个`);
+  check('标记的是第一个候选 v1', r1.id === 'v1', `实际 ${r1.id}`);
+
+  const r2 = await withPage(twoVids, async p => {
+    await markTargetVideo(p, makeHooks());
+    const first = await p.$eval('video[data-ch-target="1"]', (e: any) => e.id);
+    await markTargetVideo(p, makeHooks());
+    const again = await p.$eval('video[data-ch-target="1"]', (e: any) => e.id);
+    return { first, again };
+  });
+  check('重复调用不换目标（锁定稳定）', r2.first === r2.again, `${r2.first} → ${r2.again}`);
+
+  const r3 = await withPage(twoVids, async p => {
+    await markTargetVideo(p, makeHooks());
+    await markTargetVideo(p, makeHooks(), new Set([A]));
+    const id = await p.$eval('video[data-ch-target="1"]', (e: any) => e.id).catch(() => null);
+    return id;
+  });
+  check('目标已完成（进 skipList）后换到 v2', r3 === 'v2', `实际 ${r3}`);
+
+  const r4 = await withPage(twoVids, async p => {
+    await markTargetVideo(p, makeHooks());
+    return await p.$$eval('video', (els: any[]) =>
+      els.map((e: any) => `${e.id}:${e.getAttribute('data-ch-target') || '-'}`)
+    );
+  });
+  check('非目标视频不带标记', r4.join(',') === 'v1:1,v2:-', `实际 ${r4.join(',')}`);
+
+  // forcePlay 的 targetOnly 模式：没有目标时必须返回 null，
+  // 不能回退到「第一个 video」——那正是两个视频互相抢的来源
+  const r5 = await withPage(twoVids, p => forcePlay(p.frames()[0], true, true));
+  check('targetOnly 且无目标时返回 null', r5 === null, `实际 ${r5 ? '有状态' : 'null'}`);
+
+  const r6 = await withPage(twoVids, async p => {
+    await p.$eval('#v2', (e: any) => e.setAttribute('data-ch-target', '1'));
+    const st: any = await forcePlay(p.frames()[0], true);
+    return st ? st.rate : null;
+  });
+  check('targetOnly 有目标时能正常读到状态', r6 !== null, `实际 ${r6}`);
+
+  // 保活 ticker 必须遵守同一个「目标」定义。它曾经无条件
+  // `querySelectorAll('video')` 全量拉起，是「两个视频同时播」的直接原因。
+  check('保活 ticker 带目标守卫', SPY_JS.includes('data-ch-target'), '');
 
   console.log(`\n结果：${pass} 通过，${fail} 失败\n`);
   process.exit(fail > 0 ? 1 : 0);

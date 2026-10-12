@@ -485,7 +485,7 @@ export class ChaoxingEngine {
                     }
                   }
                 } else {
-                  const r = await waitForVideoEnd(this.opts.page, this.hooks);
+                  const r = await waitForVideoEnd(this.opts.page, this.hooks, doneVideos);
                   if (r === 'completed') {
                     const picked = lastPickedVideoSrc();
                     if (picked) doneVideos.add(picked); // 记下来，下一轮别再选它
