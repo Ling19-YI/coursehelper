@@ -224,6 +224,17 @@ export class VisionSearcher implements Searcher {
       throw new Error(`HTTP ${resp.status} 非 JSON 响应 content-type=${ct} 前 200 字: ${raw.slice(0, 200)}`);
     }
 
+    // 用量要记下来。截图识别是按图计费的，用户会关心「一次测验花多少」，
+    // 而响应里本来就带 usage，以前直接丢掉了。
+    // 实测 5 题打包成一次请求约 1.3K 输入 token。
+    const usage = json?.usage;
+    if (usage && usage.prompt_tokens != null) {
+      const parts = [`入 ${usage.prompt_tokens}`, `出 ${usage.completion_tokens ?? '?'}`];
+      const cached = usage.prompt_tokens_details?.cached_tokens;
+      if (cached) parts.push(`缓存命中 ${cached}`);
+      this.o.log?.('info', `  · 用量：${parts.join(' / ')} tokens`);
+    }
+
     const out = extractText(json);
     const msg = json?.choices?.[0]?.message;
     // 推理模型会把 token 花在 reasoning_content 上，content 可能整段为空。
@@ -231,7 +242,8 @@ export class VisionSearcher implements Searcher {
     if (!out && msg?.reasoning_content) {
       throw new Error(
         `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
-          `max_tokens 太小被推理吃光了`
+          `max_tokens 太小被推理吃光了` +
+          `（本次 入 ${usage?.prompt_tokens ?? '?'} / 出 ${usage?.completion_tokens ?? '?'}）`
       );
     }
     return out;
