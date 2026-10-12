@@ -363,6 +363,27 @@ export class ChaoxingEngine {
           // 播完一个就地找下一个未完成的视频接着播。
           let rounds = 0;
           const MAX_ROUNDS = 12;
+          let lastLeft: number | null = null;
+
+          // ⚠️ 进章节只做一次，绝不能放进下面的循环。
+          // 放进循环的话，每轮都会重新触发 toOld(...,0)——而它的末位参数恒为 0，
+          // 等于把页面重置回第一个任务点，第二个视频永远轮不到，还会反复重播
+          // 第一个。这正是「一章两个视频不会自动往下」的原因。
+          const entered = await clickChapter(this.opts.page, this.hooks, chapter);
+          if (!entered) {
+            summary.skipped++;
+            this.log('warn', '    ⚠ 未能进入该章节，跳过');
+            this.emit({
+              type: 'chapter',
+              index: ++processed,
+              total: todoable.length,
+              name,
+              result: 'enter_failed',
+              ts: Date.now(),
+            });
+            emitProgress();
+            continue;
+          }
 
           for (;;) {
             if (++rounds > MAX_ROUNDS) {
@@ -381,16 +402,7 @@ export class ChaoxingEngine {
 
             let result: ChapterResult = 'error';
             try {
-              const entered = await clickChapter(this.opts.page, this.hooks, chapter);
-              if (!entered) {
-                // 点不进去就别继续：后面所有步骤都是对着上一个页面操作，
-                // 会把结果记成"已完成"，造成静默的数据污染。
-                summary.skipped++;
-                result = 'enter_failed';
-                this.log('warn', `    ⚠ 未能进入该任务点，跳过`);
-                break;
-              }
-
+              // 本轮不再点章节——页面已在本章，靠 scroll2Job 在本页内切换任务点
               const isQuiz = await isQuizPage(this.opts.page);
               if (isQuiz) {
                 const qr = await handleQuiz(
@@ -489,6 +501,13 @@ export class ChaoxingEngine {
               }
               break;
             }
+            // 待完成数没下降说明本轮白跑（多半是又把同一个任务点播了一遍）。
+            // 立即停手，别闷头重试 12 轮——那样用户只会看到同一段视频循环播放。
+            if (lastLeft !== null && left >= lastLeft) {
+              this.log('warn', `    ⚠ 本章待完成数仍为 ${left}（未下降），停止本章`);
+              break;
+            }
+            lastLeft = left;
 
             // 还有未完成的任务点：平台自带的 scroll2Job 会跳到它，
             // 下一轮循环再探测视频。若跳不过去，回目录由外层推进。
