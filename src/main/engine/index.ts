@@ -13,7 +13,7 @@ import type {
 import { TaskControl, StopError } from './control';
 import { ProgressStore } from './progress';
 import { diagVideo, setMediaPlayback } from './keepalive';
-import { login, getCourses, openCourseChapters, clickChapter, goBackToCourse, getChapters } from './chaoxing';
+import { login, getCourses, openCourseChapters, clickChapter, goBackToCourse, getChapters, diagnoseEmptyChapters } from './chaoxing';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
 import { TikuStore } from './tiku';
@@ -192,12 +192,19 @@ export class ChaoxingEngine {
 
         const { chapters, platform } = await openCourseChapters(this.opts.page, this.hooks, course);
         if (!chapters.length) {
-          this.log('warn', '✗ 未找到章节，跳过该课程');
+          // 光说「未找到章节」没法定位。按最常见的原因给出可操作提示：
+          // 换账号后仍用旧课表 → 用新会话打开旧班级链接 → 无权限页 → 目录为空。
+          const reason = await diagnoseEmptyChapters(this.opts.page);
+          this.log('warn', `✗ 未找到章节，跳过该课程${reason ? `（${reason}）` : ''}`);
+          this.log('info', '   若刚换过账号，请重新获取一次课程列表再开始');
           continue;
         }
 
         const todoable = chapters.filter(c => c.onclick.includes('toOld'));
-        let progress = this.store.load(course.courseId);
+        // 进度按 (账号, courseId) 归属。同一门课可能被多个账号选修，
+        // 不核对账号就会拿别人的完成记录跳过章节。
+        const accountKey = String(creds?.username || '').trim();
+        let progress = this.store.load(course.courseId, accountKey);
 
         // 平台侧任务点已全部完成：用平台口径补齐本地进度，跳过整门课
         if (platform && platform.total > 0 && platform.done >= platform.total) {
@@ -208,8 +215,10 @@ export class ChaoxingEngine {
               completedChapters: [],
               lastChapter: '',
               updatedAt: Date.now(),
+              account: accountKey,
             };
           }
+          progress.account = progress.account || accountKey;
           for (const c of todoable) {
             if (!progress.completedChapters.includes(c.onclick)) progress.completedChapters.push(c.onclick);
           }
@@ -243,8 +252,11 @@ export class ChaoxingEngine {
               completedChapters: [],
               lastChapter: '',
               updatedAt: Date.now(),
+              account: accountKey,
             };
           }
+          // 老进度文件没有 account 字段，认领为当前账号，避免下次又认不出
+          if (!progress.account) progress.account = accountKey;
           return progress as CourseProgress;
         };
 

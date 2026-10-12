@@ -55,6 +55,15 @@ export interface CourseProgress {
   completedChapters: string[];
   lastChapter: string;
   updatedAt: number;
+  /**
+   * 这份进度属于哪个账号。
+   *
+   * 同一门课可能被多个账号选修（同一 courseId），而进度文件只按 courseId 存。
+   * 不记账号的话，换账号后会拿别人的完成记录去跳过章节，表现为「换了账号
+   * 任务点一个都不刷」。老数据没有这个字段，按「不认账、沿用」处理，
+   * 不做破坏性迁移。
+   */
+  account?: string;
 }
 
 export interface Credentials {

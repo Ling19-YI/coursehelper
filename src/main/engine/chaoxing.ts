@@ -580,3 +580,34 @@ export async function openCourseChapters(
   if (platform) h.log('info', `   平台进度: ${platform.done}/${platform.total}`);
   return { chapters, platform };
 }
+
+/**
+ * 目录为空时给出可定位的原因。
+ *
+ * 「找不到任务点」是最难远程排查的一类反馈——用户看到的就是目录空着，
+ * 而背后的原因可能完全相反：无权限、未登录、还在加载、或真是空课。
+ * 这里把页面上的特征读出来，让日志能自己说清是哪种。
+ */
+export async function diagnoseEmptyChapters(page: Page): Promise<string> {
+  try {
+    const url = page.url();
+    // 1) 明显的无权限/错误页
+    for (const f of page.frames()) {
+      try {
+        const text: string = await f.$eval('body', b => (b as HTMLElement).innerText);
+        if (/没有权限|无权限|权限不足|课程不存在|已退课|访问被拒绝/.test(text)) {
+          return '当前账号无权限访问该课程（多为课表缓存属于其他账号）';
+        }
+        if (/请先登录|登录后|重新登录/.test(text)) return '会话已失效，需要重新登录';
+      } catch {}
+    }
+    // 2) 被踢回登录/门户页
+    if (/passport2|login/i.test(url)) return '被重定向到登录页，会话已失效';
+    // 3) 目录 frame 干脆没出现
+    const hasFrame = page.frames().some(f => f.url().includes('studentcourse'));
+    if (!hasFrame) return '未加载出章节目录框架（页面可能未加载完或课程结构异常）';
+    return '目录框架在但没有任何任务点（该课程可能确实没有任务点）';
+  } catch {
+    return '';
+  }
+}
