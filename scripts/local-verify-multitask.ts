@@ -31,7 +31,14 @@ import {
   type Chapter,
 } from '../src/main/engine/chaoxing';
 import { isQuizPage } from '../src/main/engine/quiz';
-import { waitForVideo, waitForVideoEnd } from '../src/main/engine/video';
+import {
+  waitForVideo,
+  waitForVideoEnd,
+  readUnfinishedCount,
+  detectDailyLimit,
+  gotoUnfinishedJob,
+} from '../src/main/engine/video';
+import { handleDocument } from '../src/main/engine/document';
 import type { EngineHooks } from '../src/main/engine/hooks';
 
 const LEGACY_DIR = 'C:\\Users\\colorful\\Documents\\Default Project\\-';
@@ -160,68 +167,79 @@ async function main() {
     log(`\n━━━━━━━━ [${i + 1}/${targets.length}] ${ch.name.replace(/\s+/g, ' ').trim()} ━━━━━━━━`);
     log(`  该章节共 ${ch.jobCount} 个任务点，待完成 ${ch.pendingCount} 个`);
 
-    // 与引擎一致的重入逻辑：一章多任务点时要反复点同一个条目
+    // 与引擎一致的逻辑：进入一次，页面内推进多个任务点
     let rounds = 0;
-    let lastPending = ch.pendingCount;
     for (;;) {
       if (++rounds > 8) {
-        log('  ✗ 重入超过 8 次，放弃');
+        log('  ✗ 超过 8 轮，放弃');
         break;
       }
       log(`  ── 第 ${rounds} 轮 ──`);
-      dumpFrames(`点击前 #${i + 1}.${rounds}`);
 
-      const entered = await clickChapter(page, hooks, ch);
-      if (!entered) {
-        log(`  ✗ 没能进入「${ch.name}」——这正是 bug 的症状`);
-        results.push({ name: ch.name, entered: false, outcome: 'enter_failed' });
+      if (rounds === 1) {
+        dumpFrames(`点击前 #${i + 1}`);
+        const entered = await clickChapter(page, hooks, ch);
+        if (!entered) {
+          log(`  ✗ 没能进入「${ch.name}」`);
+          results.push({ name: ch.name, entered: false, outcome: 'enter_failed' });
+          break;
+        }
+        log('  ✓ 已点击进入');
+      }
+
+      if (await detectDailyLimit(page)) {
+        log('  ⚠ 平台提示「今日视频任务点完成数已达上限」——视频能放但不记完成');
+        results.push({ name: ch.name, entered: true, outcome: 'daily_limit' });
         break;
       }
-      log('  ✓ 已点击进入');
 
       const quiz = await isQuizPage(page);
       if (quiz) {
-        log('  这是答题页（本次验证脚本不处理答题，跳过）');
+        log('  这是答题页（验证脚本不处理答题）');
         results.push({ name: ch.name, entered: true, outcome: 'quiz_skipped' });
-        await goBackToCourse(page, hooks);
         break;
       }
 
       const hasVideo = await waitForVideo(page, hooks);
       if (!hasVideo) {
-        log('  ⚠ 没有等到视频');
-        results.push({ name: ch.name, entered: true, outcome: 'no_video' });
-        await goBackToCourse(page, hooks);
+        log('  无视频，按文档型任务点处理…');
+        const doc = await handleDocument(page, hooks);
+        log(`  ⇒ 文档处理结果：${doc}`);
+        const left = await readUnfinishedCount(page);
+        const done = left !== null && left <= 0;
+        log(`  平台未完成计数：${left === null ? '读不到' : left} → ${done ? '已完成 ✓' : '未标记'}`);
+        results.push({
+          name: ch.name,
+          entered: true,
+          outcome: done ? 'doc_done' : doc === 'unsupported' ? 'doc_unsupported' : 'doc_not_marked',
+        });
         break;
       }
-      log('  ✓ 视频已就绪，等待播放完成…');
 
+      log('  ✓ 视频已就绪，等待播放完成…');
       const outcome = await waitForVideoEnd(page, hooks);
       log(`  ⇒ 播放结果：${outcome}`);
       results.push({ name: ch.name, entered: true, outcome });
 
-      await goBackToCourse(page, hooks);
-      dumpFrames('返回课程后');
-
-      // 关键：重新读该章节的待完成数，决定要不要再点一次
-      const after = await getChapters(page);
-      const now_ = after.find(c => c.onclick === ch.onclick);
-      if (!now_) {
-        log('  返回后目录里没有该条目了，视为处理完');
+      const left = await readUnfinishedCount(page);
+      log(`  本章未完成计数：${left === null ? '读不到' : left}`);
+      if (left === null) {
+        // 读不到 ≠ 做完了。可能已离开章节页（反爬验证页等），别误报成功。
+        log('  ⚠ 读不到未完成计数，本轮结果不可判定');
         break;
       }
-      log(`  返回后：共 ${after.length} 个任务点；本章待完成 ${now_.pendingCount}/${now_.jobCount}`);
-      if (now_.isCompleted || now_.pendingCount <= 0) {
-        log(`  ✅ 本章 ${now_.jobCount} 个任务点全部完成`);
+      if (left <= 0) {
+        log('  ✓ 本章无剩余任务点');
         break;
       }
-      if (now_.pendingCount >= lastPending) {
-        log(`  ⚠ 待完成数未下降（${now_.pendingCount}），再点也只会打开同一个，停止重入`);
-        break;
-      }
-      lastPending = now_.pendingCount;
-      log(`  → 还剩 ${now_.pendingCount} 个，继续处理下一个任务点`);
+      const jumped = await gotoUnfinishedJob(page);
+      log(`  → 还有 ${left} 个未完成，跳转${jumped ? '成功' : '失败'}`);
+      if (!jumped) break;
+      await hooks.ctl.sleep(1500);
     }
+
+    dumpFrames('本章结束');
+    await goBackToCourse(page, hooks);
   }
 
   // ── 汇总 ──

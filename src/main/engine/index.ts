@@ -13,11 +13,18 @@ import type {
 import { TaskControl, StopError } from './control';
 import { ProgressStore } from './progress';
 import { diagVideo, setMediaPlayback } from './keepalive';
-import { login, getCourses, openCourseChapters, clickChapter, goBackToCourse, getChapters, diagnoseEmptyChapters } from './chaoxing';
+import {
+  login,
+  getCourses,
+  openCourseChapters,
+  clickChapter,
+  goBackToCourse,
+  diagnoseEmptyChapters,
+} from './chaoxing';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
 import { TikuStore } from './tiku';
-import { waitForVideo, waitForVideoEnd } from './video';
+import { waitForVideo, waitForVideoEnd, readUnfinishedCount, detectDailyLimit, gotoUnfinishedJob } from './video';
 import type { ChapterResult } from '../../shared/types';
 import type { EngineHooks } from './hooks';
 
@@ -181,6 +188,9 @@ export class ChaoxingEngine {
     }
     this.running = true;
     this.ctl.reset();
+    // 平台「今日任务点完成数已达上限」——命中后视频照放但不记完成，
+    // 继续跑纯空转。用一个标志让它能中止整轮并在收尾时说明原因。
+    let dailyLimitHit = false;
 
     try {
       if (!(await this.ensureLogin(creds))) return summary;
@@ -342,17 +352,27 @@ export class ChaoxingEngine {
             `\n[${doneHere() + 1}/${todoable.length}] ${name.substring(0, 50)}${jobNote}`
           );
 
-          // ── 一章多任务点：反复进入同一个条目，直到待完成数归零 ──
-          // 平台每次点击只会打开第一个未完成的任务点，刷完必须再点同一个条目。
-          // 以前只点一次就跳到下一个章节，剩下的任务点永远不访问。
+          // ── 一章多任务点 ──
+          // 实机确认：同一章节的多个任务点并列挂在同一个页面里（会同时出现
+          // 两个 ananas/modules/video iframe），而且目录条目的
+          // onclick="toOld(courseId, chapterId, clazzId, 0)" 末位参数恒为 0，
+          // 回目录再点只会又打开同一个任务点。所以必须在页面内推进：
+          // 播完一个就地找下一个未完成的视频接着播。
           let rounds = 0;
-          const MAX_ROUNDS = 20;
-          let lastPending = chapter.pendingCount;
+          const MAX_ROUNDS = 12;
 
           for (;;) {
             if (++rounds > MAX_ROUNDS) {
-              this.log('warn', `    ⚠ 已重入 ${MAX_ROUNDS} 次仍未完成，放弃该章节`);
+              this.log('warn', `    ⚠ 本章已处理 ${MAX_ROUNDS} 轮仍未完成，放弃`);
               summary.skipped++;
+              break;
+            }
+            // 平台自报「今日任务点完成数已达上限」时，视频照放但不记完成，
+            // 继续刷纯属空转，直接停下并说明，别让用户白等一整晚。
+            if (await detectDailyLimit(this.opts.page)) {
+              this.log('warn', '    ⚠ 平台提示「今日视频任务点完成数已达上限」');
+              this.log('warn', '      视频能正常播放，但平台不会记入完成——先停，明天再刷');
+              dailyLimitHit = true;
               break;
             }
 
@@ -390,17 +410,21 @@ export class ChaoxingEngine {
                     `    ⚠ 答题未完成，跳过（覆盖 ${Math.round(qr.coverage * 100)}%）`
                   );
                 }
-                await goBackToCourse(this.opts.page, this.hooks);
               } else {
                 const hasVideo = await waitForVideo(this.opts.page, this.hooks);
                 if (!hasVideo) {
-                  // 文档/文本任务点：渐进滚动到底，再用平台"已完成"标记校验
+                  // 文档/文本任务点：滚动+拖拽过一遍，再用平台的未完成计数校验。
+                  // 用 readUnfinishedCount 而不是回目录翻条目——同章节多任务点
+                  // 在目录里只是一个条目，翻条目的结论不可靠。
                   const doc = await handleDocument(this.opts.page, this.hooks);
-                  await goBackToCourse(this.opts.page, this.hooks);
-                  if (doc === 'scrolled') {
-                    const list = await getChapters(this.opts.page);
-                    const found = list.find(c => c.onclick === chapter.onclick);
-                    if (found?.isCompleted) {
+                  if (doc === 'unsupported') {
+                    summary.skipped++;
+                    result = 'no_video';
+                    this.log('info', '    - 无视频/无文档，跳过');
+                  } else {
+                    const remaining = await readUnfinishedCount(this.opts.page);
+                    const done = remaining !== null && remaining <= 0;
+                    if (done) {
                       this.store.markChapterDone(ensureProgress(), chapter.onclick);
                       summary.completed++;
                       result = 'doc_done';
@@ -408,12 +432,11 @@ export class ChaoxingEngine {
                     } else {
                       summary.skipped++;
                       result = 'no_video';
-                      this.log('warn', '    ⚠ 文档已浏览但平台未标记完成，下次重试');
+                      this.log(
+                        'warn',
+                        `    ⚠ 文档已浏览但平台未标记完成${remaining === null ? '（读不到未完成计数）' : `（还剩 ${remaining} 个）`}`
+                      );
                     }
-                  } else {
-                    summary.skipped++;
-                    result = 'no_video';
-                    this.log('info', '    - 无视频/无文档，跳过');
                   }
                 } else {
                   const r = await waitForVideoEnd(this.opts.page, this.hooks);
@@ -426,7 +449,7 @@ export class ChaoxingEngine {
                     result = r;
                     this.log('warn', `    ⚠ 跳过（${r}）`);
                   }
-                  await goBackToCourse(this.opts.page, this.hooks);
+
                 }
               }
             } catch (e) {
@@ -447,34 +470,38 @@ export class ChaoxingEngine {
             });
             emitProgress();
 
-            // ── 判断这一章还有没有剩下的任务点 ──
-            if (this.ctl.isStopped) break;
-            const fresh = await getChapters(this.opts.page);
-            const now_ = fresh.find(c => c.onclick === chapter.onclick);
-            if (!now_) {
-              // 目录里没这个条目了（可能被平台折叠/刷新），当作处理完
+            // ── 本章还有没有剩下的任务点 ──
+            // 以平台自己的隐藏计数为准（input.jobUnfinishCount），
+            // 比翻目录条目可靠：同章节多任务点在目录里只是一个条目。
+            if (this.ctl.isStopped || dailyLimitHit) break;
+
+            const left = await readUnfinishedCount(this.opts.page);
+            if (left === null) {
+              // 读不到就别自作聪明地循环，回目录由外层推进
               break;
             }
-            if (now_.isCompleted || now_.pendingCount <= 0) {
+            if (left <= 0) {
               if (rounds > 1 || chapter.jobCount > 1) {
-                this.log('ok', `    ✓ 本章 ${chapter.jobCount} 个任务点全部完成`);
+                this.log('ok', '    ✓ 本章任务点已全部完成');
               }
               break;
             }
-            if (now_.pendingCount >= lastPending) {
-              // 待完成数没下降——再点也只会打开同一个任务点，别死循环
-              this.log(
-                'warn',
-                `    ⚠ 待完成数仍为 ${now_.pendingCount}（未下降），停止重入该章节`
-              );
-              break;
-            }
-            lastPending = now_.pendingCount;
+
+            // 还有未完成的任务点：平台自带的 scroll2Job 会跳到它，
+            // 下一轮循环再探测视频。若跳不过去，回目录由外层推进。
+            const jumped = await gotoUnfinishedJob(this.opts.page);
             this.log(
               'info',
-              `    → 本章还剩 ${now_.pendingCount} 个任务点，继续处理下一个`
+              `    → 本章还有 ${left} 个任务点未完成${jumped ? '' : '（未能跳转，回目录处理）'}`
             );
+            if (!jumped) break;
+            await this.hooks.ctl.sleep(1500);
           }
+
+          // 本章处理完（或放弃）后再回目录。放在这里而不是各分支里，
+          // 是因为页面内推进期间不能离开本页——一离开就回到「点条目只能
+          // 打开同一个任务点」的困境。
+          await goBackToCourse(this.opts.page, this.hooks);
         }
         emitProgress();
       }
@@ -485,6 +512,13 @@ export class ChaoxingEngine {
         'ok',
         `🎉 任务完成！已完成 ${summary.completed} 个 / 跳过 ${summary.skipped} 个`
       );
+      if (dailyLimitHit) {
+        this.log(
+          'warn',
+          '⚠ 本轮因平台「今日视频任务点完成数已达上限」提前结束。' +
+            '视频本身能正常播放，但平台不记入完成——明天再刷剩下的即可。'
+        );
+      }
     } catch (e) {
       if (e instanceof StopError || this.ctl.isStopped) {
         this.setState('stopped');

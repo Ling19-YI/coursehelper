@@ -139,7 +139,16 @@ async function hasVideoElement(page: Page): Promise<boolean> {
   return false;
 }
 
-/** 取第一个可见视频的播放状态 */
+/**
+ * 取第一个「还需要播」的可见视频的播放状态。
+ *
+ * 关键：跳过已经播完的。
+ * 同一章节页里会同时挂多个任务点 iframe（实机见过两个
+ * ananas/modules/video/index.html 并列），先播完的那个仍留在 DOM 里且依旧
+ * 「可见」。如果不过滤，第二次探测还是会选中它，于是同一个视频被反复拿来
+ * 判断，同章节的后续任务点永远轮不到——用户看到的就是「一章多任务点
+ * 只刷第一个」。
+ */
 async function probeVideo(page: Page, h: EngineHooks) {
   for (const frame of page.frames()) {
     try {
@@ -148,6 +157,9 @@ async function probeVideo(page: Page, h: EngineHooks) {
           const v = el as HTMLVideoElement;
           const r = v.getBoundingClientRect();
           if (r.width < 100 || r.height < 60) continue;
+          // 已结束 / 播放头已到末尾 → 这个任务点不用再管，看下一个
+          if (v.ended) continue;
+          if (v.duration > 0 && v.currentTime >= v.duration - 1) continue;
           return {
             ct: v.currentTime,
             d: v.duration || 0,
@@ -167,6 +179,68 @@ async function probeVideo(page: Page, h: EngineHooks) {
     }
   }
   return null;
+}
+
+/**
+ * 本章节还剩几个任务点未完成（平台自己的隐藏计数）。
+ * 读不到返回 null——不能把这个当成 0，否则会误判成「做完了」。
+ */
+export async function readUnfinishedCount(page: Page): Promise<number | null> {
+  for (const frame of page.frames()) {
+    try {
+      const v = await frame.evaluate(() => {
+        const el = document.querySelector('input.jobUnfinishCount') as HTMLInputElement | null;
+        if (!el) return null;
+        const n = Number(el.value);
+        return Number.isFinite(n) ? n : null;
+      });
+      if (v !== null) return v;
+    } catch {}
+  }
+  return null;
+}
+
+/**
+ * 平台是否已宣告「今日任务点完成数已达上限」。
+ *
+ * 命中时视频能照常播放，但平台不会把任务点记为完成，进度一动不动。
+ * 不单独识别的话，用户看到的是「刷了一整晚一个都没记上」，
+ * 而日志里只会显示视频播放正常——完全无从解释。
+ */
+export async function detectDailyLimit(page: Page): Promise<boolean> {
+  for (const frame of page.frames()) {
+    try {
+      const hit = await frame.evaluate(() => {
+        const el = document.querySelector('.jobLimitTip') as HTMLElement | null;
+        if (!el) return false;
+        const s = getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') return false;
+        return /任务点完成数已达上限|无法完成任务点/.test(el.innerText || '');
+      });
+      if (hit) return true;
+    } catch {}
+  }
+  return false;
+}
+
+/** 跳到本章下一个未完成的任务点（平台自带的 scroll2Job） */
+export async function gotoUnfinishedJob(page: Page): Promise<boolean> {
+  for (const frame of page.frames()) {
+    try {
+      const ok = await frame.evaluate(() => {
+        const fn = (window as any).scroll2Job;
+        if (typeof fn !== 'function') return false;
+        try {
+          fn();
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (ok) return true;
+    } catch {}
+  }
+  return false;
 }
 
 /** 轮询直到视频结束 / 卡住 / 异常（3s 一次，45s 无进度判定卡住） */
