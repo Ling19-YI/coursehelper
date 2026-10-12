@@ -11,6 +11,16 @@ tools/keys/
 dist/
 release/
 
+# 凭据文件一律不入库（实际存放位置是家目录，不在仓库内；
+# 这里再加一层，防止有人把令牌拷进仓库时被静默提交）
+*token*
+*-token
+*.token
+*.secret
+.env
+.env.*
+*.env
+
 # 宣传视频素材：截图含真实账号/课程信息，不入库
 promo/shots/
 promo/frames/

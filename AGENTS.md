@@ -211,6 +211,59 @@ GitCode 参数名是 `file_name`（不是 `filename`）。
 
 拼错时**状态码正常**，只能靠 `content-range` 里的总大小发现。
 
+### 4. 令牌存放约定（重要，勿改）
+
+两个令牌都存在**家目录**，不在任何 git 仓库内：
+
+| 文件 | 用途 | 身份 |
+|---|---|---|
+| `C:\Users\colorful\.coursehelper-github-token` | GitHub 细粒度令牌 | `Ling19-YI` |
+| `C:\Users\colorful\.coursehelper-gitcode-token` | GitCode 私人令牌 | `2603_95808828` |
+
+格式：**单一纯文本、无换行、无 BOM**（`cat` 出来可直接用）。
+
+用法（令牌不会进入命令历史或对话）：
+
+```bash
+# GitHub
+GH_TOKEN="$(cat 'C:/Users/colorful/.coursehelper-github-token')" node scripts/local-release.mjs
+AUTH=$(printf 'x-access-token:%s' "$(cat 'C:/Users/colorful/.coursehelper-github-token')" | base64 -w0)
+git -c "http.extraHeader=Authorization: Basic $AUTH" push origin main
+
+# GitCode
+GC_TOKEN="$(cat 'C:/Users/colorful/.coursehelper-gitcode-token')" node scripts/local-gc-release.mjs v2.1.0
+```
+
+**三条硬规则**：
+
+1. **令牌原文不写进任何文件、提交、注释或记忆文件。** 记忆文件会在每个后续会话
+   被读进上下文，写进去等于把密钥长期摊开。
+2. **不要把令牌贴进对话。** 让助手从上述文件读取即可。
+3. `.gitignore` 已加 `*token*` / `*.token` / `*.env` / `*.secret` 作为兜底，
+   **但那只是兜底**——凭据的正确存放位置是家目录，不是仓库。
+
+### 5. GitCode 的 release 无法通过 API 修改（2026-10-13 实测）
+
+| 尝试 | 结果 |
+|---|---|
+| `PATCH /repos/{o}/{r}/releases` | 405 |
+| `PUT /releases` | 405 |
+| `PATCH /releases/tags/{tag}` | 405 `METHOD_NOT_ALLOWED` |
+| `POST /releases`（同 tag） | 409 `Release already exists` |
+
+`GET /releases` 返回的对象**连 `id` 字段都没有**，无法按 id 定位。
+GitHub 则可 `PATCH /releases/{id}` 原地改。
+
+**⇒ 发布说明必须在创建 release 之前写对**，事后只能去网页版手改：
+<https://gitcode.com/2603_95808828/coursehelp/-/releases>
+
+这也是两平台描述容易不同步的根源（历史上已出过两次），改说明时两边都要确认。
+
+### 6. 验GitCode 下载链接别用 HEAD
+
+`curl -I` 返回 **401**，看着像链接失效；真实 GET（`curl -r 0-0`）是 **206** 正常。
+**GitCode 的 CDN 拒 HEAD 只收 GET**，并会302 到 `file-cdn.gitcode.com` 带签名。
+
 ### 4. GitCode 的 `releases/latest/download/` 不可用
 
 该地址返回 HTML 而非 `latest.yml`。必须先调 API 取最新 tag 再拼路径。
