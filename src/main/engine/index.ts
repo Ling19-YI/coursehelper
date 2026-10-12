@@ -221,6 +221,19 @@ export class ChaoxingEngine {
       if (!(await this.ensureLogin(creds))) return summary;
       this.setState('running');
 
+      // ── 开跑前的能力自检 ──
+      // 这两条通道都「静默失能」过：多模态明明配好，日志却一直报
+      // 「未配置多模态通道」（调用参数漏传，没有编译错误）；答题通道到底
+      // 回退到了谁，也没人确认过。开跑先亮一次，省得对着一段看不出所以然
+      // 的日志猜——上两次排查都卡在这里。
+      const vch = this.visionChannel();
+      const ach = this.answerChannel();
+      this.log(
+        'info',
+        `AI 通道自检：答题=${ach ? `${ach.label}/${ach.model}` : '未配置'}` +
+          ` | 多模态=${vch ? `就绪/${vch.model}` : '未配置（图片题会留空）'}`
+      );
+
       for (const course of courses) {
         this.ctl.throwIfStopped();
         this.log('info', `\n════ ${course.name} ════`);
