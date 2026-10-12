@@ -24,7 +24,14 @@ import {
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
 import { TikuStore } from './tiku';
-import { waitForVideo, waitForVideoEnd, readUnfinishedCount, detectDailyLimit, gotoUnfinishedJob } from './video';
+import {
+  waitForVideo,
+  waitForVideoEnd,
+  readUnfinishedCount,
+  detectDailyLimit,
+  gotoUnfinishedJob,
+  lastPickedVideoSrc,
+} from './video';
 import type { ChapterResult } from '../../shared/types';
 import type { EngineHooks } from './hooks';
 
@@ -371,6 +378,10 @@ export class ChaoxingEngine {
           let rounds = 0;
           const MAX_ROUNDS = 12;
           let lastLeft: number | null = null;
+          // 本章已经播完的视频 src。时长启发式可能因 duration 偶发读到 0 而失效，
+          // 那时 probeVideo 会重新选中刚播完的那个（用户实测：第一个视频反复播、
+          // 第二个永远轮不到）。按 src 精确排除，不依赖启发式。
+          const doneVideos = new Set<string>();
 
           // ⚠️ 进章节只做一次，绝不能放进下面的循环。
           // 放进循环的话，每轮都会重新触发 toOld(...,0)——而它的末位参数恒为 0，
@@ -446,7 +457,7 @@ export class ChaoxingEngine {
                   );
                 }
               } else {
-                const hasVideo = await waitForVideo(this.opts.page, this.hooks);
+                const hasVideo = await waitForVideo(this.opts.page, this.hooks, doneVideos);
                 if (!hasVideo) {
                   // 文档/文本任务点：滚动+拖拽过一遍，再用平台的未完成计数校验。
                   // 用 readUnfinishedCount 而不是回目录翻条目——同章节多任务点
@@ -476,6 +487,8 @@ export class ChaoxingEngine {
                 } else {
                   const r = await waitForVideoEnd(this.opts.page, this.hooks);
                   if (r === 'completed') {
+                    const picked = lastPickedVideoSrc();
+                    if (picked) doneVideos.add(picked); // 记下来，下一轮别再选它
                     this.store.markChapterDone(ensureProgress(), chapter.onclick);
                     summary.completed++;
                     result = 'completed';

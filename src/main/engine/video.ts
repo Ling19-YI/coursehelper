@@ -30,6 +30,27 @@ async function waitBlockGone(page: Page, h: EngineHooks, maxMs = 180000): Promis
 
 export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
 
+/**
+ * 判定「这个任务点已经看完了」的容差（秒）。
+ *
+ * ⚠️ waitForVideoEnd 判「完成」与 probeVideo 判「跳过已播完」**必须共用这一个值**。
+ * 曾经一个写 5、一个写 1：477s 的视频在 472s 就被判为完成，却要到 476s 才算
+ * 「已播完」；停在 475.5s 的视频两头不靠——刚判完完成又被 probeVideo 选中重播，
+ * 表现为「一章两个视频，第一个反复播，第二个永远轮不到」。
+ */
+const VIDEO_DONE_TOLERANCE_SEC = 5;
+
+/**
+ * probeVideo 最近选中的视频 src，供上层记录「这个任务点已处理完」。
+ * 时长启发式可能因为 duration 偶发读到 0 而失效，按 src 精确排除更稳。
+ */
+let lastPickedSrc: string | null = null;
+
+/** 取最近一次被选中播放的视频 src；没选中过返回 null */
+export function lastPickedVideoSrc(): string | null {
+  return lastPickedSrc;
+}
+
 /** 等待视频元数据（duration）就绪的上限 */
 const VIDEO_META_TIMEOUT_MS = 8000;
 
@@ -65,7 +86,11 @@ export function StallGuard() {
 }
 
 /** 找到视频并确保播放 */
-export async function waitForVideo(page: Page, h: EngineHooks): Promise<boolean> {
+export async function waitForVideo(
+  page: Page,
+  h: EngineHooks,
+  skipSrcs?: Set<string>
+): Promise<boolean> {
   // 刚进页面就弹扫码/验证码时，先等用户处理完再做保活动作
   const pre = await detectManualBlock(page, h.autoPauseOnVerify());
   if (pre) {
@@ -91,7 +116,7 @@ export async function waitForVideo(page: Page, h: EngineHooks): Promise<boolean>
   let last: Awaited<ReturnType<typeof probeVideo>> = null;
 
   while (!h.ctl.isStopped) {
-    last = await probeVideo(page, h);
+    last = await probeVideo(page, h, skipSrcs);
     if (last && last.d > 0) {
       const actual = last.rate || 1;
       if (last.paused) {
@@ -149,28 +174,43 @@ async function hasVideoElement(page: Page): Promise<boolean> {
  * 判断，同章节的后续任务点永远轮不到——用户看到的就是「一章多任务点
  * 只刷第一个」。
  */
-async function probeVideo(page: Page, h: EngineHooks) {
+async function probeVideo(page: Page, h: EngineHooks, skipSrcs?: Set<string>) {
+  const skip = skipSrcs && skipSrcs.size ? Array.from(skipSrcs) : [];
   for (const frame of page.frames()) {
     try {
-      const s = await frame.evaluate(() => {
-        for (const el of Array.from(document.querySelectorAll('video'))) {
-          const v = el as HTMLVideoElement;
-          const r = v.getBoundingClientRect();
-          if (r.width < 100 || r.height < 60) continue;
-          // 已结束 / 播放头已到末尾 → 这个任务点不用再管，看下一个
-          if (v.ended) continue;
-          if (v.duration > 0 && v.currentTime >= v.duration - 1) continue;
-          return {
-            ct: v.currentTime,
-            d: v.duration || 0,
-            paused: v.paused,
-            ended: v.ended,
-            rate: v.playbackRate,
-          };
-        }
-        return null;
-      });
+      // 容差要作为参数传进来：evaluate 的函数体是被序列化后送到浏览器执行的，
+      // 引用不到模块级常量（会像 __name 那样直接 ReferenceError）。
+      const s = await frame.evaluate(
+        (args: { skipList: string[]; tolSec: number }) => {
+          for (const el of Array.from(document.querySelectorAll('video'))) {
+            const v = el as HTMLVideoElement;
+            const r = v.getBoundingClientRect();
+            if (r.width < 100 || r.height < 60) continue;
+
+            // 本章已经处理完的，按 src 精确排除
+            const src = v.currentSrc || v.src || '';
+            if (src && args.skipList.indexOf(src) >= 0) continue;
+
+            // 已结束 / 播放头已到末尾 → 这个任务点不用再管，看下一个。
+            // 容差与 waitForVideoEnd 的完成判定共用，否则会来回打架。
+            if (v.ended) continue;
+            if (v.duration > 0 && v.currentTime >= v.duration - args.tolSec) continue;
+
+            return {
+              ct: v.currentTime,
+              d: v.duration || 0,
+              paused: v.paused,
+              ended: v.ended,
+              rate: v.playbackRate,
+              src,
+            };
+          }
+          return null;
+        },
+        { skipList: skip, tolSec: VIDEO_DONE_TOLERANCE_SEC }
+      );
       if (s) {
+        lastPickedSrc = s.src || null;
         // 找到可见视频就驱动它播放并应用倍速
         return await forcePlay(frame, h.muted());
       }
@@ -368,7 +408,7 @@ export async function waitForVideoEnd(page: Page, h: EngineHooks): Promise<Video
       h.onTick({ ct: s.ct, d: s.d, paused: s.paused, rate: s.rate });
       h.log('info', `[${iteration}] ${s.ct.toFixed(2)}/${Math.round(s.d)}s paused=${s.paused} rate=${s.rate}x`);
 
-if (s.ended || (s.d > 0 && s.ct >= s.d - 5)) {
+if (s.ended || (s.d > 0 && s.ct >= s.d - VIDEO_DONE_TOLERANCE_SEC)) {
         h.log('ok', '✓ 视频播放完成');
         return 'completed';
       }
