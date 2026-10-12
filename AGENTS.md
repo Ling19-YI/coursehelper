@@ -295,17 +295,31 @@ node scripts/local-preflight.mjs 2.0.0
 
 ---
 
-## 九、当前状态（2026-10-11）
+## 九、当前状态（2026-10-12）
 
-- 最新发布：**v2.0.0**
-- `feat/quiz-answering` 已并入 `main`（fast-forward），该分支保留未删
+- 最新发布：**v2.1.0**
+- `feat/quiz-answering` 已并入 `main`，该分支保留未删
 - `main` 已包含：
   - **章节测验 AI 答题**：纯文本答案链 + 本地题库沉淀 + 交卷覆盖率闸门
   - **截图识题**：图片题干 / 超星字体替换（`font-cxsecret`）两条只能看渲染画面的路
   - **视频随堂弹题**：按真实 DOM 契约实现，设置项 `answerPopup` 默认**关闭**
   - 视频静音开关、扫码/验证码/人脸弹窗检测（命中即停所有模拟动作）
   - 双源更新、换账号修复、收款码更新
+- **v2.1.0 主要变化**（面向用户的完整说明在 `scripts/local-release.mjs` 内嵌的 notes 里）：
+  - **一章多任务点**改为页面内逐个推进——此前只刷第一个就跳章，且全程不报错
+  - **左侧面板宽度**由主进程统一下发（`layout:panel`），修右侧视图遮挡
+  - **截图搜题接线修复**——`visionChannel` 此前漏传，该路径从未真正生效，
+    而日志那句「未配置多模态通道」还说反了
+  - **课程正文不再被误判成风控弹窗**：只认覆盖层形态（fixed/absolute + 层级 + 短文案）
+  - **目标视频唯一**：`data-ch-target` 统一约束 `forcePlay` 与保活 ticker，
+    修「同一章两个视频同时播 / 来回切」
+  - 换账号清课表缓存、进度按账号隔离、图片型文档拖拽、窗口尺寸持久化
+  - 「AI 自动答题」总开关真正生效；开跑打印 AI 通道自检
 - `feat/multi-platform` 开发中：PlatformDriver 契约、多平台命名空间
+- **`src/main/engine/agent/`（973 行）是预留能力，不是死代码**：
+  为「结构化解析失效的界面」（平台改版、富交互题型、纯 Canvas 渲染、新平台）
+  和后续新功能准备。接口与接线方式见 `src/main/engine/agent/README.md`。
+  **清理代码时请保留整目录。**
 - **多模态 Key 由用户自填**，只要求支持 OpenAI 兼容的 `chat/completions` +
   `image_url`（实测 mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v /
   glm-5v-turbo 可用）。纯文本模型不吃图，会返回空答案而不是报错
