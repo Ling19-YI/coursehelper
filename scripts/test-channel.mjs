@@ -16,13 +16,13 @@ function pickChannel(vision, deepseekKey) {
 const cases = [
   {
     name: '用户报告的场景：只配了多模态',
-    vision: { baseUrl: 'https://tokendance.space/gateway/v1', apiKey: 'sk-vision-key', model: 'mimo-v2.6-flash' },
+    vision: { baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test-placeholder', model: 'mimo-v2.6-flash' },
     deepseekKey: '',
     expect: '多模态',
   },
   {
     name: '只配了 DeepSeek（老用户）',
-    vision: { baseUrl: 'https://tokendance.space/gateway/v1', apiKey: '', model: 'mimo-v2.6-flash' },
+    vision: { baseUrl: 'https://api.example.com/v1', apiKey: '', model: 'mimo-v2.6-flash' },
     deepseekKey: 'sk-ds-key',
     expect: 'DeepSeek',
   },

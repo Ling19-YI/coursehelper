@@ -21,8 +21,17 @@ body,
 .panel {
   display: flex;
   flex-direction: column;
-  width: 46%;
-  min-width: 420px;
+  /*
+   * 宽度由主进程通过 --panel-width 给出（见 main/index.ts 的 layout()）。
+   * 右侧学习通是叠在渲染层之上的 WebContentsView，两者的宽度必须同源：
+   * 这里若自己写 `width: 46%` 就变成第二套算法，窗口一宽右侧视图就会
+   * 盖住面板一截（1920 宽时盖 263px）。
+   *
+   * 兜底值取面板下限 420px 而不是平均值——万一 IPC 还没到，宁可窄一点
+   * 留条缝，也不要宽出去被盖住。
+   */
+  width: var(--panel-width, 420px);
+  flex: 0 0 auto;
   height: 100vh;
   background: #0b1220;
   border-right: 1px solid #1c2536;

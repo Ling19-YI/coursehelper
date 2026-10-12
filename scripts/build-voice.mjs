@@ -9,7 +9,7 @@ import * as path from 'node:path';
  *  3) 与成片合成 -vo 版 mp4
  *
  * 用法：
- *   $env:TTS_KEY='sk-xxx'; $env:TTS_BASE='https://tokendance.space'; node scripts/build-voice.mjs
+ *   $env:TTS_KEY='sk-xxx'; $env:TTS_BASE='https://your-tts-endpoint'; node scripts/build-voice.mjs
  * 可选：$env:TTS_MODEL / $env:TTS_VOICE / $env:TTS_SPEED
  */
 const root = process.cwd();
@@ -18,7 +18,8 @@ const voiceDir = path.join(promo, 'voice');
 mkdirSync(voiceDir, { recursive: true });
 
 const KEY = process.env.TTS_KEY || '';
-const BASE = (process.env.TTS_BASE || 'https://tokendance.space').replace(/\/+$/, '');
+// 不预设 BASE：公开仓库不该把使用者导到某个特定服务商
+const BASE = (process.env.TTS_BASE || '').replace(/\/+$/, '');
 const MODEL = process.env.TTS_MODEL || 'minimax-speech-2.8-hd';
 const VOICE = process.env.TTS_VOICE || 'female-shaonv';
 const SPEED = Number(process.env.TTS_SPEED || 1.05);

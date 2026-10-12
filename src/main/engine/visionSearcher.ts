@@ -167,6 +167,23 @@ export class VisionSearcher implements Searcher {
   }
 
   private async callApi(content: any[]): Promise<string> {
+    // 推理模型（deepseek-v4.1-flash / mimo-v2.6 等）会把 token 先花在
+    // reasoning_content 上，预算不够时 content 整段为空。那不是「答不出来」，
+    // 是预算不够——加大预算重试一次，别把整批题一起废掉。
+    //
+    // 实测 deepseek-v4.1-flash 识别一张小图只用约 124 输出 token（内含
+    // 183 字推理），800 余量充足；这一步纯属防御复杂题干把推理拉长。
+    try {
+      return await this.callOnce(content, 800);
+    } catch (e: any) {
+      const m = String(e?.message || e);
+      if (!m.includes('reasoning_content')) throw e;
+      this.o.log?.('warn', '  ⚠ 推理占满 token，加倍预算重试一次');
+      return await this.callOnce(content, 3200);
+    }
+  }
+
+  private async callOnce(content: any[], maxTokens: number): Promise<string> {
     const ch = this.o.channel;
     const messages = [
       { role: 'system', content: SYSTEM },
@@ -183,7 +200,7 @@ export class VisionSearcher implements Searcher {
       ...extra,
     });
 
-    let resp = await this.post(payload({ temperature: 0, max_tokens: 800 }));
+    let resp = await this.post(payload({ temperature: 0, max_tokens: maxTokens }));
     if (resp.status === 400) resp = await this.post(payload({}));
 
     if (!resp.ok) {
@@ -207,6 +224,17 @@ export class VisionSearcher implements Searcher {
       throw new Error(`HTTP ${resp.status} 非 JSON 响应 content-type=${ct} 前 200 字: ${raw.slice(0, 200)}`);
     }
 
+    // 用量要记下来。截图识别是按图计费的，用户会关心「一次测验花多少」，
+    // 而响应里本来就带 usage，以前直接丢掉了。
+    // 实测 5 题打包成一次请求约 1.3K 输入 token。
+    const usage = json?.usage;
+    if (usage && usage.prompt_tokens != null) {
+      const parts = [`入 ${usage.prompt_tokens}`, `出 ${usage.completion_tokens ?? '?'}`];
+      const cached = usage.prompt_tokens_details?.cached_tokens;
+      if (cached) parts.push(`缓存命中 ${cached}`);
+      this.o.log?.('info', `  · 用量：${parts.join(' / ')} tokens`);
+    }
+
     const out = extractText(json);
     const msg = json?.choices?.[0]?.message;
     // 推理模型会把 token 花在 reasoning_content 上，content 可能整段为空。
@@ -214,7 +242,8 @@ export class VisionSearcher implements Searcher {
     if (!out && msg?.reasoning_content) {
       throw new Error(
         `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
-          `max_tokens 太小被推理吃光了`
+          `max_tokens 太小被推理吃光了` +
+          `（本次 入 ${usage?.prompt_tokens ?? '?'} / 出 ${usage?.completion_tokens ?? '?'}）`
       );
     }
     return out;

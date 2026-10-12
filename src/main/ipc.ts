@@ -55,6 +55,8 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
         return isNaN(v) ? 0.8 : Math.min(1, Math.max(0, v));
       },
       getAnswerPopup: () => !!store.settings.answerPopup,
+      // 默认 false：验证类弹窗误判代价高（课程正文含这些词），不因它停摆
+      getAutoPauseOnVerify: () => !!store.settings.autoPauseOnVerify,
     });
     engineDataDir = dataDir;
     return engine;
@@ -135,11 +137,16 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
     // 表现为「填了新账号，进去还是之前那个账号的课程」。
     if (prev && prev.username && prev.username !== username) {
       session.clearAuthCookies().catch(() => {});
+      // 课表缓存也必须一起清。缓存里的课程 URL 带着旧账号的 clazzid/cpi，
+      // 用新账号的会话去打开只会是无权限页——目录里一个 chapter_item 都没有，
+      // 用户看到的现象就是「换了账号后检测不到任务点」。
+      cachedCourses = null;
     }
     return true;
   });
   ipcMain.handle('credentials:clear', async () => {
     store.clearCredentials();
+    cachedCourses = null;
     // 关键：只删凭据文件不够。内嵌浏览器里旧账号的会话 Cookie 仍在，
     // 下次登录时超星会直接沿用旧身份——用户看到的就是「清空了却还是老账号」。
     try {

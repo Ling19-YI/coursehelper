@@ -25,6 +25,8 @@ export interface EngineHooks {
   vision(): { baseUrl: string; apiKey: string; model: string };
   /** 是否自动处理视频播放期间的随堂题弹窗（设置项，默认关） */
   answerPopup(): boolean;
+  /** 是否因「验证类」弹窗（人脸/验证码/安全验证）暂停等人工。默认 false */
+  autoPauseOnVerify(): boolean;
   /** 文本搜题通道（多模态优先，其次 DeepSeek），弹窗与章节测验共用 */
   visionChannel(): AnswerChannel | null;
   /** 文本搜题 key，仅用于兼容旧的单 key 调用 */

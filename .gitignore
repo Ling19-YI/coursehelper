@@ -37,6 +37,7 @@ scripts/verify-resume.ts
 # 本地探针/验证脚本，含真实路径、密钥或会话信息
 scripts/local-*.mjs
 scripts/local-*.cjs
+scripts/local-*.ps1
 
 # 宣传片中间产物与大文件（不入库）
 promo/asarcheck.jpg

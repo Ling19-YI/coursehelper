@@ -27,6 +27,11 @@ const api: Api = {
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   getUpdateState: () => ipcRenderer.invoke('update:state'),
+  onPanelWidth: cb => {
+    const handler = (_e: unknown, px: number) => cb(px);
+    ipcRenderer.on('layout:panel', handler);
+    return () => ipcRenderer.removeListener('layout:panel', handler);
+  },
   onUpdateEvent: cb => {
     const handler = (_e: unknown, info: any) => cb(info?.info ?? info);
     ipcRenderer.on('update:event', handler);

@@ -20,15 +20,16 @@ export default function Settings() {
   const { message } = App.useApp();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [key, setKey] = useState('');
   const [dataDir, setDataDir] = useState('');
   const [speed, setSpeed] = useState<number>(1);
   const [agentOn, setAgentOn] = useState(false);
   const [coverRate, setCoverRate] = useState<number>(0.8);
   const [popupOn, setPopupOn] = useState(false);
+  const [pauseOnVerify, setPauseOnVerify] = useState(false);
   const [muted, setMuted] = useState(true);
   const [visionKey, setVisionKey] = useState('');
-  const [visionBaseUrl, setVisionBaseUrl] = useState('https://tokendance.space/gateway/v1');
+  // 不预置地址：公开版本不该把用户导到某个特定服务商（尤其是别人付费的）
+  const [visionBaseUrl, setVisionBaseUrl] = useState('');
   const [visionModel, setVisionModel] = useState('mimo-v2.5');
   const [visionInfo, setVisionInfo] = useState<{ configured: boolean; hint: string }>({
     configured: false,
@@ -38,16 +39,16 @@ export default function Settings() {
 
   useEffect(() => {
     if (a.settings) {
-      setKey(a.settings.deepseekKey ?? '');
       setDataDir(a.settings.dataDir ?? '');
       setSpeed(Number(a.settings.videoSpeed) || 1);
-      setVisionBaseUrl(a.settings.visionBaseUrl || 'https://tokendance.space/gateway/v1');
+      setVisionBaseUrl(a.settings.visionBaseUrl || '');
       setVisionModel(a.settings.visionModel || 'mimo-v2.5');
       setAgentOn(!!a.settings.agentEnabled);
       setCoverRate(
         a.settings.submitCoverRate === undefined ? 0.8 : Number(a.settings.submitCoverRate)
       );
       setPopupOn(!!a.settings.answerPopup);
+      setPauseOnVerify(!!a.settings.autoPauseOnVerify);
       setMuted(a.settings.muted !== false);
     }
     if (a.username) setUsername(a.username);
@@ -76,12 +77,12 @@ export default function Settings() {
         setVisionKey('');
       }
       await a.saveSettings({
-        deepseekKey: key.trim(),
         dataDir: dataDir.trim(),
         videoSpeed: speed,
         agentEnabled: agentOn,
         submitCoverRate: coverRate,
         answerPopup: popupOn,
+        autoPauseOnVerify: pauseOnVerify,
         muted,
         visionBaseUrl: visionBaseUrl.trim(),
         visionModel: visionModel.trim() || 'mimo-v2.5',
@@ -171,7 +172,7 @@ export default function Settings() {
             autoComplete="off"
           />
           <Input
-            placeholder="接口地址"
+            placeholder="接口地址，如 https://api.example.com/v1"
             value={visionBaseUrl}
             onChange={e => setVisionBaseUrl(e.target.value)}
             autoComplete="off"
@@ -190,26 +191,32 @@ export default function Settings() {
       </div>
 
       <div className="cardish">
-        <b>DeepSeek API Key（选填）</b>
-        <div className="muted" style={{ margin: '6px 0 10px' }}>
-          备用通道，仅在上方多模态 Key 为空时才使用。填了多模态就不用填这里。
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <b>遇到人脸识别 / 验证码时暂停</b>
+          <Tooltip title="开启后，检测到人脸识别、验证码或安全验证弹窗会停下手上的模拟动作等人工处理；关闭则照常运行，真卡住时会被判为停滞并跳过该节。">
+            <Switch checked={pauseOnVerify} onChange={setPauseOnVerify} />
+          </Tooltip>
         </div>
-        <Input.Password
-          placeholder="sk-..."
-          value={key}
-          onChange={e => setKey(e.target.value)}
-          autoComplete="off"
-        />
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          默认<strong>关闭</strong>。这类弹窗的识别很容易误判——课程正文里本来就会出现「人脸识别」
+          「验证码」这些词，一旦误判整轮刷课就停在那里等人，而日志里看不出所以然。
+          关闭后引擎照常跑，真遇到验证码会因视频停滞被判为卡住并跳过，不会无限等。
+        </div>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          手机扫码不受此项影响：始终会暂停。引擎一旦继续动作，二维码会被平台判定为环境变化
+          而反复刷新，人根本扫不上。
+        </div>
       </div>
 
       <div className="cardish">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <b>视频中的随堂题弹窗</b>
           <Tooltip title="关闭时遇到弹窗会等 StallGuard 判定卡住后在日志提示；开启后自动答题并继续播放。">
+            {/* 总开关（AI 自动答题）关掉时，这个子开关没有意义 */}
             <Switch
               checked={popupOn}
               onChange={setPopupOn}
-              disabled={!visionInfo.configured && !a.settings?.deepseekKey}
+              disabled={!visionInfo.configured || !agentOn}
             />
           </Tooltip>
         </div>

@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page, Frame } from 'playwright';
 import type { Course } from '../../shared/types';
 import type { EngineHooks } from './hooks';
 
@@ -12,6 +12,14 @@ export interface Chapter {
   name: string;
   onclick: string;
   isCompleted: boolean;
+  /**
+   * 该章节包含的任务点总数（DOM: input.knowledgeJobCount）。
+   * 一个 chapter_item 是「任务点分组」，不是单个任务点——
+   * 点它只会进入第一个未完成的，剩下的要再点同一个条目。
+   */
+  jobCount: number;
+  /** 待完成的任务点数（DOM: span.catalog_points_yi）。0 = 本节已全部完成 */
+  pendingCount: number;
 }
 
 interface RawCourse {
@@ -425,39 +433,101 @@ async function loginWithForm(
   return false;
 }
 
+/**
+ * 定位章节目录所在的 frame。
+ *
+ * 必须按 URL 找，不能按 page.frames()[1] 下标找——返回课程后平台会重建
+ * iframe，下标 1 很可能已经指向别的 frame。那时 querySelector 什么都找不到，
+ * 而调用方又是「找不到就静默跳过」，最终表现为「一个章节里只刷了第一个
+ * 任务点，后面全部无声跳过」。
+ */
+function findChapterFrame(page: Page): Frame | null {
+  const frames = page.frames();
+  const byUrl = frames.find(f => f.url().includes('studentcourse'));
+  if (byUrl) return byUrl;
+  // 兜底：URL 没变过的老页面。仍然可能指错，所以调用方必须能发现失败。
+  return frames[1] ?? null;
+}
+
+/**
+ * 读取章节目录。
+ *
+ * 一个 chapter_item 对应一个「章节」，里面可能含多个任务点。DOM 里：
+ *   input.knowledgeJobCount      → 任务点总数
+ *   span.catalog_points_yi       → 待完成数（随完成递减，0 = 刷完）
+ * 这两个数必须读出来，否则「一章多任务点」只会刷第一个——
+ * 引擎遍历到下一个 chapter_item 就再也回不来了。
+ */
 export async function getChapters(page: Page): Promise<Chapter[]> {
-  const frame = page.frames()[1];
+  const frame = findChapterFrame(page);
   if (!frame) return [];
   return frame.$$eval('[class*="chapter_item"]', (els: any[]) =>
     els.map(el => {
       const html: string = el.outerHTML || '';
       const text: string = el.innerText || '';
+
+      const jobInput = el.querySelector('input.knowledgeJobCount') as HTMLInputElement | null;
+      const jobCount = Number(jobInput?.value) || 0;
+      const pendingEl = el.querySelector('.catalog_points_yi');
+      const pendingCount = Number((pendingEl?.textContent || '').trim()) || 0;
+
+      // 平台完成标记：已完成图标 icon_yiwanc / 文本"已完成" / completed 类名
+      // 另外「有待完成数为 0 但确实有任务点」同样算完成——老判断漏了这种情况
+      const markedDone =
+        html.includes('icon_yiwanc') ||
+        text.includes('已完成') ||
+        String(el.className).includes('completed') ||
+        String(el.className).includes('finished') ||
+        String(el.className).includes('done');
+
       return {
         name: text.trim().substring(0, 60),
         onclick: el.getAttribute('onclick') || '',
-        // 平台完成标记：已完成图标 icon_yiwanc / 文本"已完成" / completed 类名
-        isCompleted:
-          html.includes('icon_yiwanc') ||
-          text.includes('已完成') ||
-          String(el.className).includes('completed') ||
-          String(el.className).includes('finished') ||
-          String(el.className).includes('done'),
+        jobCount,
+        pendingCount,
+        isCompleted: markedDone || (jobCount > 0 && pendingCount === 0),
       };
     })
   );
 }
 
-export async function clickChapter(page: Page, h: EngineHooks, chapter: Chapter) {
-  const frame = page.frames()[1];
-  if (!frame) return;
-  const el = await frame.$(`[onclick="${chapter.onclick}"]`);
-  if (el) {
-    await el.click({ force: true });
-    await h.ctl.sleep(3000);
+/**
+ * 点击一个任务点。
+ *
+ * 找不到元素时必须发出声音——静默跳过会让「只刷了第一个任务点」这种 bug
+ * 表现得毫无线索。返回是否真的点下去了，调用方可以据此重试或中止。
+ */
+export async function clickChapter(
+  page: Page,
+  h: EngineHooks,
+  chapter: Chapter
+): Promise<boolean> {
+  const frame = findChapterFrame(page);
+  if (!frame) {
+    h.log('warn', `    ⚠ 找不到章节目录 frame，无法进入「${chapter.name}」`);
+    return false;
   }
+  const el = await frame.$(`[onclick="${chapter.onclick}"]`);
+  if (!el) {
+    h.log(
+      'warn',
+      `    ⚠ 目录里找不到「${chapter.name}」——平台可能已收起该章节，或页面已刷新`
+    );
+    return false;
+  }
+  await el.click({ force: true });
+  await h.ctl.sleep(3000);
+  return true;
 }
 
-export async function goBackToCourse(page: Page, h: EngineHooks) {
+/**
+ * 返回课程章节页。
+ *
+ * 只点「返回课程」不够：平台回来后目录常常是收起的，同一个章节下的其他
+ * 任务点不在 DOM 里，后面逐个 clickChapter 全部找不到。所以必须再点一次
+ * 「章节」页签把目录重新展开，并等目录 frame 就绪。
+ */
+export async function goBackToCourse(page: Page, h: EngineHooks): Promise<void> {
   const back = await page.$('text=返回课程');
   if (back) {
     await back.click({ force: true });
@@ -466,7 +536,17 @@ export async function goBackToCourse(page: Page, h: EngineHooks) {
   const tab = await page.$('text=章节');
   if (tab) {
     await tab.click({ force: true });
-    await h.ctl.sleep(2000);
+    await h.ctl.sleep(2500);
+  }
+  // 确认目录 frame 真的回来了，别让下一次 clickChapter 对着空 frame 找
+  const frame = findChapterFrame(page);
+  if (!frame) {
+    h.log('warn', '    ⚠ 返回课程后未找到章节目录 frame');
+    return;
+  }
+  const n = await frame.$$eval('[class*="chapter_item"]', els => els.length).catch(() => -1);
+  if (n === 0) {
+    h.log('warn', '    ⚠ 返回课程后目录为空，可能需要重新进入课程');
   }
 }
 
@@ -499,4 +579,35 @@ export async function openCourseChapters(
   }
   if (platform) h.log('info', `   平台进度: ${platform.done}/${platform.total}`);
   return { chapters, platform };
+}
+
+/**
+ * 目录为空时给出可定位的原因。
+ *
+ * 「找不到任务点」是最难远程排查的一类反馈——用户看到的就是目录空着，
+ * 而背后的原因可能完全相反：无权限、未登录、还在加载、或真是空课。
+ * 这里把页面上的特征读出来，让日志能自己说清是哪种。
+ */
+export async function diagnoseEmptyChapters(page: Page): Promise<string> {
+  try {
+    const url = page.url();
+    // 1) 明显的无权限/错误页
+    for (const f of page.frames()) {
+      try {
+        const text: string = await f.$eval('body', b => (b as HTMLElement).innerText);
+        if (/没有权限|无权限|权限不足|课程不存在|已退课|访问被拒绝/.test(text)) {
+          return '当前账号无权限访问该课程（多为课表缓存属于其他账号）';
+        }
+        if (/请先登录|登录后|重新登录/.test(text)) return '会话已失效，需要重新登录';
+      } catch {}
+    }
+    // 2) 被踢回登录/门户页
+    if (/passport2|login/i.test(url)) return '被重定向到登录页，会话已失效';
+    // 3) 目录 frame 干脆没出现
+    const hasFrame = page.frames().some(f => f.url().includes('studentcourse'));
+    if (!hasFrame) return '未加载出章节目录框架（页面可能未加载完或课程结构异常）';
+    return '目录框架在但没有任何任务点（该课程可能确实没有任务点）';
+  } catch {
+    return '';
+  }
 }

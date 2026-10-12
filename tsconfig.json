@@ -10,8 +10,30 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "allowImportingTsExtensions": false,
+    // noEmit 下开着它，脚本里写 import '../src/.../llm.ts' 才合法（如 test-timeout.mts）
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
-  "include": ["src/**/*", "tools/**/*"]
+
+  // scripts/ 也纳进来：它曾经长期不在检查范围内，于是 chapter-markers.ts 里
+  // 的 `new Engine(...)`（类早已改名 ChaoxingEngine）烂了很久没人发现，
+  // probe 脚本引用了不存在的 EngineHooks 字段也一样能跑起来才报错。
+  // 代价是下列「本地草稿」脚本有历史类型错误——它们已被 .gitignore 排除，
+  // 属于一次性排查产物，不值得修，故显式排除。要动它们就先修类型。
+  "include": ["src/**/*", "tools/**/*", "scripts/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "release",
+    "test-data",
+
+    "scripts/chapter-markers.ts",
+    "scripts/debug-chapters.ts",
+    "scripts/debug-open-chapter.ts",
+    "scripts/doc-experiment.ts",
+    "scripts/doc-scroll-test.ts",
+    "scripts/probe-manual.ts",
+    "scripts/verify-resume.ts",
+    "scripts/engine-cli.ts"
+  ]
 }

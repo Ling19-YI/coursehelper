@@ -13,7 +13,8 @@ const voiceDir = path.join(vDir, 'voice');
 mkdirSync(voiceDir, { recursive: true });
 
 const KEY = process.env.TTS_KEY || '';
-const BASE = (process.env.TTS_BASE || 'https://tokendance.space').replace(/\/+$/, '');
+// 不预设 BASE：公开仓库不该把使用者导到某个特定服务商
+const BASE = (process.env.TTS_BASE || '').replace(/\/+$/, '');
 const MODEL = process.env.TTS_MODEL || 'minimax-speech-2.8-hd';
 const VOICE = process.env.TTS_VOICE || 'female-shaonv';
 const SPEED = Number(process.env.TTS_SPEED || 1.12); // 竖版节奏更快
