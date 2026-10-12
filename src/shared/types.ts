@@ -25,7 +25,9 @@ export type ChapterResult =
   | 'quiz_ok'
   | 'quiz_skip'
   | 'error'
-  | 'skipped';
+  | 'skipped'
+  /** 没能进入该任务点（目录里找不到 / frame 丢失），未做任何处理 */
+  | 'enter_failed';
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'ok';
 
@@ -95,6 +97,8 @@ export interface AppSettings {
   visionBaseUrl: string;
   /** 多模态模型名 */
   visionModel: string;
+  /** 窗口上次关闭时的位置与大小；空表示用默认值 */
+  windowBounds: { x?: number; y?: number; width: number; height: number; maximized?: boolean } | null;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -113,4 +117,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // 实测可用：mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v / glm-5v-turbo；
   // deepseek-v4-pro 之类纯文本模型不吃图，会返回空答案。
   visionModel: 'mimo-v2.5',
+  windowBounds: null,
 };

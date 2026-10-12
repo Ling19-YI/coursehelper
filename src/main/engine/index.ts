@@ -325,7 +325,24 @@ export class ChaoxingEngine {
 
           let result: ChapterResult = 'error';
           try {
-            await clickChapter(this.opts.page, this.hooks, chapter);
+            const entered = await clickChapter(this.opts.page, this.hooks, chapter);
+            if (!entered) {
+              // 点不进去就别继续：后面所有步骤都是对着上一个页面操作，
+              // 会把结果记成"已完成"，造成静默的数据污染。
+              summary.skipped++;
+              result = 'enter_failed';
+              this.log('warn', `    ⚠ 未能进入该任务点，跳过`);
+              this.emit({
+                type: 'chapter',
+                index: ++processed,
+                total: todoable.length,
+                name,
+                result,
+                ts: Date.now(),
+              });
+              emitProgress();
+              continue;
+            }
 
             const isQuiz = await isQuizPage(this.opts.page);
             if (isQuiz) {
