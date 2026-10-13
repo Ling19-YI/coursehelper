@@ -66,7 +66,9 @@ async function callOnce(
   maxTokens: number,
   minimal: boolean
 ): Promise<string> {
-  const LIMIT_MS = 45000;
+  // 跟输出预算一起抬高：推理模型可能烧掉上万 token 的 reasoning_content，
+  // 45 秒会在它想完之前把连接掐掉，故障就从「content 为空」变成「超时」。
+  const LIMIT_MS = 180000;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
   let resp: Response;
@@ -119,12 +121,14 @@ async function callOnce(
   }
   const msg = json?.choices?.[0]?.message;
   const content = String(msg?.content ?? '');
+  const finish = json?.choices?.[0]?.finish_reason;
   // 推理模型把 token 花在 reasoning_content 上，content 可能整段为空。
   // 那不是「答不出来」是预算不够——明确报出来，让上层加大预算重试。
+  // finish_reason 一起带出来：光看 content 为空分不清撞顶、网关截断还是真空。
   if (!content.trim() && msg?.reasoning_content) {
     throw new Error(
       `${ch.label} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
-        `max_tokens 被推理吃光了`
+        `max_tokens ${maxTokens} 被推理吃光了（finish=${finish ?? '?'}）`
     );
   }
   return content;
@@ -137,8 +141,10 @@ async function callOnce(
  * 就是 OpenAI 兼容的 /chat/completions，纯文本问答无需图片参数，直接复用。
  *
  * 重试策略（三次）：
- *   1. 标准参数（temperature 0.1 + max_tokens 2000）
- *   2. 加大预算到 6000 —— 防推理模型把预算花在 reasoning_content 上
+ *   1. 直接给足预算（temperature 0.1 + max_tokens 16000）—— 推理模型会先烧
+ *      一大截 reasoning_content，预算给小了必然白烧一整轮（实测这个模型整卷
+ *      答题的推理可达上万 token，2000 那档只能拿回空 content）
+ *   2. 升到 32000 —— 题量偏大时推理继续膨胀
  *   3. 最小体重试 —— 只发 model+messages，绕开不收这两个参数的网关
  * 401/402 是鉴权/余额问题，重试无意义，直接抛出。
  */
@@ -149,7 +155,7 @@ export async function askAI(
   const prompt = buildPrompt(questions);
   let lastErr = '';
   for (let attempt = 0; attempt < 3; attempt++) {
-    const maxTokens = attempt === 0 ? 2000 : 6000;
+    const maxTokens = attempt === 0 ? 16000 : 32000;
     const minimal = attempt === 2;
     try {
       const content = await callOnce(ch, prompt, maxTokens, minimal);

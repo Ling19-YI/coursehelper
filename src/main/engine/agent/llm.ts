@@ -176,7 +176,10 @@ export async function askQuizByVision(
     //   none →  4.2s，但多选变全选、判断题答反，准确率不可用
     //   low  → 16.7s，准确率可用
     reasoning_effort: (cfg.effort ?? 'low') as 'low' | 'none',
-    max_tokens: 3000,
+    // 预算直接给足：推理模型的 reasoning_content 会先吃掉输出预算，
+    // 给 3000 时「单图超 8 题」就撞顶（输出截断、content 拿不到完整 JSON）。
+    // 与 visionSearcher / searcher 取同一个上限口径。
+    max_tokens: 16000,
   };
 
   const parsed = await callOnce(cfg, list, opts, body);
@@ -189,9 +192,11 @@ export async function askQuizByVision(
 
 /** 单次调用 */
 async function callOnce(cfg: VisionConfig, list: ShotInput[], _opts: any, body: any): Promise<QuizAnswer[]> {
-  // 视觉模型单批实测 14-38s，给 75s 余量；到期必须中断，
-  // 否则中转服务不响应时会永久挂起，stall 检测也被 freeze 住无法判定卡住。
-  const LIMIT_MS = 75000;
+  // 视觉模型单批实测 14-38s；到期必须中断，否则中转服务不响应时会永久挂起，
+  // stall 检测也被 freeze 住无法判定卡住。
+  // 2026-10-13 真实探针：16000 预算下同批题跑了 84 秒（推理 1.1 万 token），
+  // 所以超时跟着预算一起放宽——否则「预算给够」会变成「请求超时」。
+  const LIMIT_MS = 180000;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), LIMIT_MS);
   const t0 = Date.now();
@@ -226,8 +231,8 @@ async function callOnce(cfg: VisionConfig, list: ShotInput[], _opts: any, body: 
   const finish = choice?.finish_reason || '';
   const parsed = extractAnswers(raw);
   if (!parsed.length && finish === 'length' && !_opts.__retried) {
-    // 输出被截断：提高 max_tokens 重试一次
-    body.max_tokens = Math.min(6000, (body.max_tokens || 3000) * 2);
+    // 输出被截断：提高 max_tokens 重试一次（16000 起步，翻倍但封顶 32000）
+    body.max_tokens = Math.min(32000, (body.max_tokens || 16000) * 2);
     body.messages[1].content[0].text +=
       '\n注意：上一轮输出被截断，请务必只输出JSON，note 字段不要写，务必给全部题目作答。';
     return callOnce(cfg, list, { ..._opts, __retried: true }, body);

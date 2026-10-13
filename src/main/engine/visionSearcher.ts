@@ -40,6 +40,51 @@ const SYSTEM = [
   '无法判断时不要返回这道题，而不是猜一个。',
 ].join('');
 
+/**
+ * 首次请求的输出预算。
+ *
+ * 推理模型把输出预算先花在 reasoning_content 上，content 是「剩下的」；
+ * 预算给不够就一个字都不剩（HTTP 200、finish_reason=length、content 空）。
+ * 实测（deepseek-v4.1-flash，5 张不同的题图，真实网关）：
+ *
+ *   max_tokens=800    → finish=length，content 0 字，推理 1772 字就撞顶
+ *   max_tokens=3200   → 用户日志里同样撞顶（推理 4440 字）
+ *   max_tokens=16000  → finish=stop，出 11404 token（其中 11358 全是推理）、84 秒
+ *
+ * 所以第一发就按 16000 发。上限是天花板不是账单——给大了只在真需要时多花，
+ * 给小了必然白烧一整轮：800 那档花掉 800 token 换回 0 字 content，再升档重来一遍，
+ * 既多花钱又让用户多等一轮。
+ */
+const VISION_MAX_TOKENS = 16000;
+
+/** 撞顶后的升档上限（题量偏大时推理还会继续膨胀） */
+const VISION_MAX_TOKENS_HARD = 32000;
+
+/**
+ * 单次请求的超时。
+ *
+ * 跟预算一起抬高：实测 16000 预算下这一批 5 题跑了 84 秒，而原来的 60 秒超时
+ * 会让「不给够预算」的故障换一副面孔出现——变成「请求超时」。两处必须同改。
+ */
+const VISION_TIMEOUT_MS = 180000;
+
+/**
+ * 推理把输出预算吃光了（finish_reason=length）。
+ *
+ * 单独一个类型，是因为它不算「调用失败」而是「预算不够」：上层要能认出来去
+ * 升档重试，而不是当成模型答不出来把整批题一起废掉。
+ */
+export class ReasoningBudgetError extends Error {
+  constructor(
+    message: string,
+    /** 被截断时已经吐出来的 content（可能为空） */
+    readonly partial: string
+  ) {
+    super(message);
+    this.name = 'ReasoningBudgetError';
+  }
+}
+
 function buildUserPrompt(items: Array<{ id: number; stem: string; options: QuizOption[] }>): string {
   const lines: string[] = ['请根据题号与对应截图作答。'];
   for (const it of items) {
@@ -167,19 +212,28 @@ export class VisionSearcher implements Searcher {
   }
 
   private async callApi(content: any[]): Promise<string> {
-    // 推理模型（deepseek-v4.1-flash / mimo-v2.6 等）会把 token 先花在
-    // reasoning_content 上，预算不够时 content 整段为空。那不是「答不出来」，
-    // 是预算不够——加大预算重试一次，别把整批题一起废掉。
-    //
-    // 实测 deepseek-v4.1-flash 识别一张小图只用约 124 输出 token（内含
-    // 183 字推理），800 余量充足；这一步纯属防御复杂题干把推理拉长。
+    // 第一发就给足预算，不再「先饿一次再补」——实测 800 和 3200 都会被推理吃光，
+    // 饿那一轮纯属白花：烧掉整轮预算、拿回 0 字 content，然后升档再烧一遍。
     try {
-      return await this.callOnce(content, 800);
-    } catch (e: any) {
-      const m = String(e?.message || e);
-      if (!m.includes('reasoning_content')) throw e;
-      this.o.log?.('warn', '  ⚠ 推理占满 token，加倍预算重试一次');
-      return await this.callOnce(content, 3200);
+      return await this.callOnce(content, VISION_MAX_TOKENS);
+    } catch (e) {
+      if (!(e instanceof ReasoningBudgetError)) throw e;
+      this.o.log?.(
+        'warn',
+        `  ⚠ 推理把 ${VISION_MAX_TOKENS} token 预算吃光了，升到 ${VISION_MAX_TOKENS_HARD} 重试一次`
+      );
+      try {
+        return await this.callOnce(content, VISION_MAX_TOKENS_HARD);
+      } catch (e2) {
+        // 升档后还是被截断：宁可把已经吐出来的那部分答案拿去解析，也别整批丢空。
+        // 越界的选项会在 invokeAll 的 validate 里被丢掉，不会硬塞错误答案。
+        const partial = e2 instanceof ReasoningBudgetError ? e2.partial : '';
+        if (partial) {
+          this.o.log?.('warn', `  ⚠ 升到 ${VISION_MAX_TOKENS_HARD} 仍被截断，改用已吐出的部分内容`);
+          return partial;
+        }
+        throw e2;
+      }
     }
   }
 
@@ -237,13 +291,20 @@ export class VisionSearcher implements Searcher {
 
     const out = extractText(json);
     const msg = json?.choices?.[0]?.message;
-    // 推理模型会把 token 花在 reasoning_content 上，content 可能整段为空。
-    // 这不是失败，但必须报出来，否则会误判成「模型答不出来」。
-    if (!out && msg?.reasoning_content) {
-      throw new Error(
-        `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）——` +
-          `max_tokens 太小被推理吃光了` +
-          `（本次 入 ${usage?.prompt_tokens ?? '?'} / 出 ${usage?.completion_tokens ?? '?'}）`
+    const finish = json?.choices?.[0]?.finish_reason;
+    const usageNote = `本次 入 ${usage?.prompt_tokens ?? '?'} / 出 ${usage?.completion_tokens ?? '?'}`;
+    // 撞上输出上限。推理模型会把预算先花在 reasoning_content 上，content 是
+    // 「剩下的」——吃光了就一个字都不剩，日志里只剩 reasoning_content。
+    // 必须报成专门的错误类型（而不是普通失败）让上层升档重试，
+    // 否则会被误判成「模型答不出来」，整批题一起丢空。
+    // finish_reason 必须看：光看 content 为空分不清是撞顶、网关截断还是真空。
+    if (finish === 'length') {
+      throw new ReasoningBudgetError(
+        (!out && msg?.reasoning_content
+          ? `HTTP ${resp.status} content 为空，只有 reasoning_content（${String(msg.reasoning_content).length} 字）`
+          : `HTTP ${resp.status} 输出被截断`) +
+          `——max_tokens ${maxTokens} 被推理吃光了（finish=length，${usageNote}）`,
+        out
       );
     }
     return out;
@@ -253,7 +314,7 @@ export class VisionSearcher implements Searcher {
   private async post(payload: any): Promise<Response> {
     const ch = this.o.channel;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.o.timeoutMs ?? 60000);
+    const timer = setTimeout(() => ctrl.abort(), this.o.timeoutMs ?? VISION_TIMEOUT_MS);
     try {
       return await fetch(`${ch.baseUrl.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',

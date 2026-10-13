@@ -49,6 +49,9 @@ scripts/local-*.mjs
 scripts/local-*.cjs
 scripts/local-*.ps1
 
+# 推理预算探针的中间产物（生成的题图、用例、输出）
+.probe/
+
 # 宣传片中间产物与大文件（不入库）
 promo/asarcheck.jpg
 promo/manbo-test/
