@@ -231,7 +231,7 @@ AUTH=$(printf 'x-access-token:%s' "$(cat 'C:/Users/colorful/.coursehelper-github
 git -c "http.extraHeader=Authorization: Basic $AUTH" push origin main
 
 # GitCode
-GC_TOKEN="$(cat 'C:/Users/colorful/.coursehelper-gitcode-token')" node scripts/local-gc-release.mjs v2.1.0
+GC_TOKEN="$(cat 'C:/Users/colorful/.coursehelper-gitcode-token')" node scripts/local-gc-release.mjs v2.1.1
 ```
 
 **三条硬规则**：
@@ -348,9 +348,10 @@ node scripts/local-preflight.mjs 2.0.0
 
 ---
 
-## 九、当前状态（2026-10-12）
+## 九、当前状态（2026-10-13）
 
-- 最新发布：**v2.1.0**
+- 最新发布：**v2.1.1**（发布说明唯一来源：`docs/v2.1.1发布说明.md`，
+  两个发布脚本的内嵌 notes 均由它生成）
 - `feat/quiz-answering` 已并入 `main`，该分支保留未删
 - `main` 已包含：
   - **章节测验 AI 答题**：纯文本答案链 + 本地题库沉淀 + 交卷覆盖率闸门
@@ -358,16 +359,20 @@ node scripts/local-preflight.mjs 2.0.0
   - **视频随堂弹题**：按真实 DOM 契约实现，设置项 `answerPopup` 默认**关闭**
   - 视频静音开关、扫码/验证码/人脸弹窗检测（命中即停所有模拟动作）
   - 双源更新、换账号修复、收款码更新
-- **v2.1.0 主要变化**（面向用户的完整说明在 `scripts/local-release.mjs` 内嵌的 notes 里）：
-  - **一章多任务点**改为页面内逐个推进——此前只刷第一个就跳章，且全程不报错
-  - **左侧面板宽度**由主进程统一下发（`layout:panel`），修右侧视图遮挡
-  - **截图搜题接线修复**——`visionChannel` 此前漏传，该路径从未真正生效，
-    而日志那句「未配置多模态通道」还说反了
-  - **课程正文不再被误判成风控弹窗**：只认覆盖层形态（fixed/absolute + 层级 + 短文案）
-  - **目标视频唯一**：`data-ch-target` 统一约束 `forcePlay` 与保活 ticker，
-    修「同一章两个视频同时播 / 来回切」
-  - 换账号清课表缓存、进度按账号隔离、图片型文档拖拽、窗口尺寸持久化
-  - 「AI 自动答题」总开关真正生效；开跑打印 AI 通道自检
+- **v2.1.1 主要变化**（面向用户的完整说明在 `docs/v2.1.1发布说明.md`）：
+  - **AI 答题「无解」四层根因**：失败不上浮 / 输出预算一开始给足（16000，
+    推理吃光自动升档 32000 重试）/ 配置判定一致 / 自检列明缺什么
+  - **单通道收敛**：删除旧版 DeepSeek 回退（`api.deepseek.com` 已不在包内）
+  - **混合章节按任务点分派**（`jobpoint`）：一页里的视频/文档/测验依次做完
+  - **目标标记跨轮残留**（`clearTargetMark`）与**平台记账滞后**（`waitUnfinishDrop`）
+  - **扫码弹窗三连修**：保活 ticker 认 `__kaBlocked`、`BLOCK_CLEAN_POLLS=3`
+    连续稳定才算处理完、风控页按 URL 判定并中止整轮（`riskBlocked`，
+    收尾不再假报「任务完成」）
+  - **手动切章节**：`user_switched` 让位、从手动点的那节重新开始、不记账
+  - **更新器修复**：`isAddNoCacheQuery=false`（GitCode 源不吃查询串）——
+    ⚠️ 该修复在 v2.1.0 安装包构建之后，**v2.1.0 用户手上的更新器是坏的**，
+    升级说明必须引导覆盖安装
+  - 收款码更新（关于页 + 落地页）
 - `feat/multi-platform` 开发中：PlatformDriver 契约、多平台命名空间
 - **`src/main/engine/agent/`（973 行）是预留能力，不是死代码**：
   为「结构化解析失效的界面」（平台改版、富交互题型、纯 Canvas 渲染、新平台）

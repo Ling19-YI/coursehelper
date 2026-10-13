@@ -281,11 +281,11 @@ footer{
   <div class="nav-l">
     <img src="assets/icon.png" alt="">
     刷课助手
-    <span>v2.1.0</span>
+    <span>v2.1.1</span>
   </div>
   <div class="nav-r">
     <a class="nav-btn" href="https://gitcode.com/2603_95808828/coursehelp" target="_blank" rel="noopener">源码</a>
-    <a class="nav-btn primary" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.0/CourseHelper-Setup-2.1.0.exe">下载</a>
+    <a class="nav-btn primary" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.1/CourseHelper-Setup-2.1.1.exe">下载</a>
   </div>
 </nav>
 
@@ -300,7 +300,7 @@ footer{
     </p>
 
     <div class="cta-row">
-      <a class="cta" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.0/CourseHelper-Setup-2.1.0.exe">
+      <a class="cta" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.1/CourseHelper-Setup-2.1.1.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 3v13M6 11l6 6 6-6M5 21h14"/>
         </svg>
@@ -310,7 +310,7 @@ footer{
         <span class="k">110 MB</span> · Windows 10 / 11 (64 位)
       </div>
       <div class="cta-alt">
-        GitHub 打不开？<a href="https://github.com/Ling19-YI/coursehelper/releases/tag/v2.1.0" target="_blank" rel="noopener">备用渠道</a>
+        GitHub 打不开？<a href="https://github.com/Ling19-YI/coursehelper/releases/tag/v2.1.1" target="_blank" rel="noopener">备用渠道</a>
       </div>
     </div>
   </div>
@@ -375,23 +375,22 @@ footer{
 <section class="wrap">
   <div class="sec-head rise">
     <div class="sec-tag">更新日志</div>
-    <h2>v2.1.0</h2>
-    <p>2026-10-12 · 23 项用户反馈修复</p>
+    <h2>v2.1.1</h2>
+    <p>2026-10-13 · AI 答题、扫码弹窗与混合章节修复</p>
   </div>
   <div class="log rise">
     <div class="log-head">
-      <span class="log-ver">v2.1.0</span>
-      <span class="log-date">2026-10-12</span>
+      <span class="log-ver">v2.1.1</span>
+      <span class="log-date">2026-10-13</span>
     </div>
     <ul>
-      <li><b>一章多任务点</b>：改为在同一页内逐个推进，不再只处理第一个（此前第二个任务点永远轮不到）</li>
-      <li><b>截图识题真正接通</b>：图片题干 / 超星字体替换的题目此前通道从未传进去，现可正常作答</li>
-      <li>修复<b>课程正文被误判成「人脸识别弹窗」</b>，导致整门课卡住、连累后面的课</li>
-      <li>修复<b>换账号后检测不到任务点</b>、<b>进度串号</b></li>
-      <li>修复<b>右侧界面遮挡左侧操作面板</b>（窗口越宽遮得越多）</li>
-      <li>修复<b>需要向下拖动的图片文档无法完成</b></li>
-      <li>新增<b>平台当日任务点上限识别</b>：不再空转一整晚，并直接说明原因</li>
-      <li>窗口尺寸与位置会被记住；<b>验证类弹窗默认不再暂停</b></li>
+      <li><b>AI 答题配好了却一直「无解」</b>：失败原因上浮、输出预算一开始给足、配置判定一致——本地能跑、用户不行的根因修掉</li>
+      <li><b>扫码/人脸弹窗的二维码一直被刷新</b>：程序自己的保活动作在页面里继续动，现在人工介入期间彻底停住；弹窗要连续几秒不出现才算处理完</li>
+      <li><b>一章里同时有视频、文档、测验时只做测验</b>：现在按当前任务点分派，依次做完</li>
+      <li><b>被平台风控拦截时假装「任务完成」</b>：现在如实停下并说明原因，不再把剩余课程全标成跳过</li>
+      <li>新增<b>手动切换章节</b>：刷课中点了别的章节，就从你点的那一节接着刷</li>
+      <li>修复<b>在线更新的备用下载源失效</b>（GitCode 源从未成功过，本版修复）</li>
+      <li>移除无界面可维护的旧版 DeepSeek 备用通道</li>
     </ul>
   </div>
 </section>
