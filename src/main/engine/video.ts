@@ -41,6 +41,15 @@ export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
 const VIDEO_DONE_TOLERANCE_SEC = 5;
 
 /**
+ * 每个视频最多自动处理几道随堂弹题。
+ *
+ * 上限是**防死循环**，不是「一个视频只有一道题」——实测有课程在同一视频里
+ * 连着弹多道（答完一道收起后又弹下一道）。没有上限时，若弹题被点了不消失，
+ * 会反复处理同一道题，与 StallGuard 的 45s 卡住判定互相打架。
+ */
+const VIDEO_POPUP_MAX_PER_VIDEO = 3;
+
+/**
  * probeVideo 最近选中的视频 src，供上层记录「这个任务点已处理完」。
  * 时长启发式可能因为 duration 偶发读到 0 而失效，按 src 精确排除更稳。
  */
@@ -468,6 +477,9 @@ export async function waitForVideoEnd(
   // 进入本函数时的目标 src。目标标记万一丢失（iframe 重挂或平台已做完移除），
   // 重选后若是另一个视频，说明当前任务点已经了结，不必再等。
   const enteredSrc = lastPickedSrc;
+  // 每个视频最多处理几道随堂弹题。上限是防死循环，不是「一个视频只有一道题」——
+  // 有的课在同一个视频里连着弹好几道，答到上限就交给用户处理。
+  let popupSeen = 0;
 
   while (true) {
     ctl.throwIfStopped();
@@ -512,22 +524,24 @@ export async function waitForVideoEnd(
       lastUrl = currentUrl;
     }
 
-    let popupHandledThisVideo = false;
-
     // 视频播放期间的随堂弹题。
     //
     // 判定依据是 #videoquiz-submit 这个提交按钮，而不是「页面上有没有弹窗容器」——
     // 超星页面上常驻一堆空弹窗容器（#workpop / #hintPop 等），按容器判断会一直误报。
     //
     // 默认关闭：设置项 answerPopup。平台把弹题当考勤手段的课程不在此列。
-    if (h.answerPopup() && !popupHandledThisVideo) {
+    //
+    // 次数上限而不是「只处理一次」：不少课程在同一个视频里会连着弹好几道。
+    // 上限存在的理由是防死循环——弹题被点了不消失时，反复处理同一道题
+    // 会和 StallGuard 的45s 卡住判定打架。上限内答完就停。
+    if (h.answerPopup() && popupSeen < VIDEO_POPUP_MAX_PER_VIDEO) {
       try {
         const r = await answerVideoPopup(page, h, h.visionChannel(), {
           tiku: h.tiku(),
           submitCoverRate: h.submitCoverRate(),
         });
         if (r) {
-          popupHandledThisVideo = true;
+          popupSeen++;
           h.log(
             'ok',
             `    ✓ 随堂弹题已处理（点选 ${r.answered}，提交 ${r.submitted}${r.retried ? `，改选 ${r.retried}` : ''}）`
@@ -535,6 +549,8 @@ export async function waitForVideoEnd(
         }
       } catch (e) {
         rethrowIfStopped(h, e);
+        // 抛异常说明处理链路本身坏了，再试只会重复报错，直接封顶。
+        popupSeen = VIDEO_POPUP_MAX_PER_VIDEO;
         h.log('warn', `    ⚠ 随堂弹题处理失败：${String((e as any)?.message || e).slice(0, 70)}`);
       }
     }
@@ -584,7 +600,13 @@ export async function waitForVideoEnd(
     }
     if (st.stuck) {
       h.log('warn', '⚠ 卡住（45s 无进度）');
-      h.log('warn', '  常见原因：视频中途弹出随堂题需手动作答，或平台限流/弹窗遮挡');
+      // 按可能性排序给可操作的下一步，而不是泛泛说"常见原因"——
+      // 用户看到这行时最想知道的是"我该怎么办"。
+      h.log('warn', '  最可能：视频中途弹了随堂题/ 弹窗，视频已暂停');
+      if (!h.answerPopup()) {
+        h.log('warn', '  → 「设置 → 视频中的随堂题弹窗」默认关闭，开启后会自动答题');
+      }
+      h.log('warn', '  其次：平台限流或弹窗遮挡 → 看下方 diag 截图');
       const d = await h.diag('stuck');
       if (d) h.log('info', `[diag] ${d}`);
       return 'stuck';

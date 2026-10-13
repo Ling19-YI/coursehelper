@@ -97,7 +97,7 @@ export class ChaoxingEngine {
       // 设置页把它描述为「总开关」，就得真的管住所有答题路径。
       answerPopup: () => !!opts.getAgentEnabled() && !!opts.getAnswerPopup(),
       autoPauseOnVerify: () => !!opts.getAutoPauseOnVerify(),
-      visionChannel: () => this.answerChannel(),
+      visionChannel: () => this.visionChannel(),
       deepseekKey: () => opts.getDeepseekKey(),
       tiku: () => this.tiku,
       submitCoverRate: () => opts.getSubmitCoverRate(),
