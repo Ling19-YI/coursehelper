@@ -23,6 +23,7 @@ import {
 } from './chaoxing';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
+import { activeJob, jobKindLabel } from './jobpoint';
 import { TikuStore } from './tiku';
 import {
   waitForVideo,
@@ -447,7 +448,40 @@ export class ChaoxingEngine {
             let result: ChapterResult = 'error';
             try {
               // 本轮不再点章节——页面已在本章，靠 scroll2Job 在本页内切换任务点
-              const isQuiz = await isQuizPage(this.opts.page);
+              //
+              // 「本章该做哪一种任务点」必须按**当前活跃任务点**判，不能只问
+              // 「DOM 里有没有测验 iframe」。一个章节可以并列挂 视频+测验+文档，
+              // 三个 iframe 一进页面就同时在 DOM 里——旧逻辑一见测验 iframe 就
+              // 整章走答题分支，视频/文档永远轮不到。这正是用户反馈的
+              // 「一个章节多个类型……无法识别执行」。详见 jobpoint.ts。
+              //
+              // 刚进章节那一轮还要先等任务点 iframe 的 URL 落定：iframe 是先
+              // 创建后导航，提交顺序不保证与 DOM 次序一致，可能只看得见先提交的
+              // 测验 iframe 而把整章误判成测验（同一 bug 换了触发时机）。
+              // 用目录声明的任务点总数当收敛判据。
+              const wantJobs = rounds === 1 ? chapter.jobCount || 0 : 0;
+              const active = await activeJob(this.opts.page, wantJobs);
+              if (rounds === 1) {
+                if (active.total > 1) {
+                  this.log(
+                    'info',
+                    `    本章共 ${active.total} 个任务点（已完成 ${active.finished}），当前是${
+                      active.job ? jobKindLabel(active.kind) : '未能判定的类型'
+                    }`
+                  );
+                }
+                // 识别数少于目录声明的任务点数 = 有暂不支持的模块类型，
+                // 如实说出来，别让它变成「无声跳过」。
+                if (chapter.jobCount > 0 && active.total < chapter.jobCount) {
+                  this.log(
+                    'warn',
+                    `    ⚠ 目录显示本章有 ${chapter.jobCount} 个任务点，只识别到 ${active.total} 个（可能有暂不支持的模块类型，将尽力完成能识别的）`
+                  );
+                }
+              }
+              const isQuiz =
+                active.kind === 'quiz' ||
+                (active.kind === 'unknown' && (await isQuizPage(this.opts.page)));
               // 设置页的「AI 自动答题」是总开关：关掉就所有题目都不答。
               // 它曾经只被声明、从未被读取——用户关掉后测验照样自动答题，
               // 与设置页「关闭后遇到题目会跳过并记入日志」的说明正好相反。
@@ -482,7 +516,12 @@ export class ChaoxingEngine {
                   );
                 }
               } else {
-                const hasVideo = await waitForVideo(this.opts.page, this.hooks, doneVideos);
+                // 已判定是文档任务点就别再去等视频元数据（白等 8s），
+                // 直接按文档走；只有类型未判定时才沿用「先探视频」的老路。
+                const hasVideo =
+                  active.kind === 'document'
+                    ? false
+                    : await waitForVideo(this.opts.page, this.hooks, doneVideos);
                 if (!hasVideo) {
                   // 文档/文本任务点：滚动+拖拽过一遍，再用平台的未完成计数校验。
                   // 用 readUnfinishedCount 而不是回目录翻条目——同章节多任务点

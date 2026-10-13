@@ -4,6 +4,7 @@ import type { AnswerChannel, QType, QuizOption, QuizQuestion } from './quizTypes
 import { CacheSearcher, LlmSearcher, resolveAnswers, type Searcher } from './searcher';
 import { VisionSearcher } from './visionSearcher';
 import type { TikuStore } from './tiku';
+import { activeJob, jobFrameFinished } from './jobpoint';
 
 export type { QType, QuizOption, QuizQuestion, AnswerChannel } from './quizTypes';
 
@@ -423,7 +424,17 @@ export async function findQuizFrames(page: Page): Promise<Frame[]> {
       if (hit) out.push(frame);
     } catch {}
   }
-  return out;
+
+  // 去掉「平台已标记完成」的测验任务点。
+  // 混合章节里做完第 1 个测验任务点后，它的 iframe 仍留在 DOM，
+  // 下一轮遇到第 2 个测验时若不剔除，handleQuiz 会按「题目数最多」重新
+  // 选中已做完的那个，把答案又填一遍却什么也没提交成功。
+  const alive: Frame[] = [];
+  for (const f of out) {
+    if (await jobFrameFinished(f)) continue;
+    alive.push(f);
+  }
+  return alive.length ? alive : out;
 }
 
 /** 找弹窗式答题容器（随堂练习弹窗等），返回 frame + 容器选择器 */
@@ -951,8 +962,24 @@ function isPlausibleQuestion(q: QuizQuestion): boolean {
   return false;
 }
 
-/** 兼容旧调用 */
+/**
+ * 本章当前该做的是不是测验？
+ *
+ * ⚠️ 判定必须落到「当前活跃的任务点」上，不能只看「DOM 里有没有测验 iframe」。
+ * 一个章节可以并列挂 视频 + 测验 + 文档 三种任务点，它们的 iframe 一进页面
+ * 就**同时存在于 DOM**。旧实现只要发现测验 iframe 就返回 true，于是混合章节
+ * 永远走答题分支、视频与文档永远轮不到——用户反馈的
+ * 「一个章节多个类型，里面有视频可能有测试可能有文档，无法识别执行」正是此因。
+ *
+ * 现在：先用 jobpoint 定位活跃任务点（未完成 + 可视区内），类型明确就按类型判；
+ * 只有类型判不出来（unknown）时才退回旧的启发式（弹窗 / 测验 frame URL / 正文）。
+ */
 export async function isQuizPage(page: Page): Promise<boolean> {
+  const active = await activeJob(page);
+  if (active.kind === 'video' || active.kind === 'document') return false;
+  if (active.kind === 'quiz') return true;
+
+  // ↓ 类型未知才走的老路，保留以兼容判不出任务点的老课程页
   if (await findQuizPopup(page)) return true;
   const frames = await findQuizFrames(page);
   for (const f of frames) {
