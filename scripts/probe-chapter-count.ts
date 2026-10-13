@@ -43,7 +43,6 @@ async function main() {
     answerPopup: () => false,
     autoPauseOnVerify: () => false,
     visionChannel: () => null,
-    deepseekKey: () => '',
     tiku: () => null,
     submitCoverRate: () => 0.8,
   };

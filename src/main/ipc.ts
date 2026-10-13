@@ -38,7 +38,6 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
       page,
       dataDir,
       emit,
-      getDeepseekKey: () => store.settings.deepseekKey,
       getVideoSpeed: () => Number(store.settings.videoSpeed) || 1,
       getMuted: () => store.settings.muted !== false,
       getAgentEnabled: () => !!store.settings.agentEnabled,

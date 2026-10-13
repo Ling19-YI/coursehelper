@@ -39,14 +39,13 @@ export interface EngineOptions {
   page: Page;
   dataDir: string;
   emit(e: EngineEvent): void;
-  getDeepseekKey(): string;
   /** 视频倍速（1 / 1.25 / 1.5 / 2） */
   getVideoSpeed(): number;
     /** 视频静音（默认 true） */
     getMuted(): boolean;
   /** AI 答题总开关 */
   getAgentEnabled(): boolean;
-  /** 多模态视觉服务配置 */
+  /** 多模态 AI 服务配置——答题、看图解题、随堂弹题共用这一条通道 */
   getVision(): { baseUrl: string; apiKey: string; model: string };
   /** 交卷前要求的最低答案覆盖率（0~1，0=关闭） */
   getSubmitCoverRate(): number;
@@ -98,49 +97,21 @@ export class ChaoxingEngine {
       answerPopup: () => !!opts.getAgentEnabled() && !!opts.getAnswerPopup(),
       autoPauseOnVerify: () => !!opts.getAutoPauseOnVerify(),
       visionChannel: () => this.visionChannel(),
-      deepseekKey: () => opts.getDeepseekKey(),
       tiku: () => this.tiku,
       submitCoverRate: () => opts.getSubmitCoverRate(),
     };
   }
 
   /**
-   * 章节测验用的 AI 通道。
+   * AI 通道——全场景就这一条：文本答题、截图识判、随堂弹题都用它。
    *
-   * 优先用多模态配置：用户通常只填了「多模态 API Key」，
-   * 而多模态接口本身就是 OpenAI 兼容的 /chat/completions，
-   * 纯文本答题无需图片参数，可以直接复用。
-   * 只有在没配多模态时才回退到单独的 DeepSeek Key。
-   */
-  private answerChannel(): AnswerChannel | null {
-    const v = this.opts.getVision();
-    // baseUrl 和 apiKey 都必须有：只填 key 不填地址时，会拿着空 baseUrl 去
-    // fetch('/chat/completions')，报一句看不出因果的网络错误。
-    if (v?.apiKey && v.baseUrl) {
-      return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model, label: '多模态' };
-    }
-    // 旧版遗留回退：设置界面早就删了 DeepSeek 专栏，但这个字段还留在
-    // settings.json 里被读。从旧版升级来的用户一直靠这条 invisible 路径
-    // 答题（本地能跑、用户报「无解」的差异就有它一份），密钥过期时同样
-    // 静默失效，而设置里没地方换。label 写明来源，让自检日志能指路。
-    const dk = this.opts.getDeepseekKey();
-    if (dk) {
-      return {
-        baseUrl: 'https://api.deepseek.com/v1',
-        apiKey: dk,
-        model: 'deepseek-chat',
-        label: 'DeepSeek（旧版密钥，建议改配多模态）',
-      };
-    }
-    return null;
-  }
-
-  /**
-   * 多模态专用通道，供「截图搜题」用。
+   * 多模态模型本身就能读文本（/chat/completions 不带图片参数即可），
+   * 没必要为纯文本答题再养第二条密钥。双通道时代（多模态 + 旧版
+   * DeepSeek 回退）正是「本地可以、用户无解」的根源：两条路径配置
+   * 真相不一致，其中一条还没有界面能维护，失效时完全静默。
    *
-   * ⚠️ 不要复用 answerChannel()：那个在没配多模态时会回退到 DeepSeek，
-   * 而 DeepSeek 是纯文本模型，收不了图。截图识判必须只认多模态配置，
-   * 否则会把图片请求发到不支持图片的接口上，返回一句看不出因果的错。
+   * baseUrl 和 apiKey 必须都有：只填 key 不填地址时，会拿着空 baseUrl
+   * 去 fetch('/chat/completions')，报一句看不出因果的网络错误。
    */
   private visionChannel(): AnswerChannel | null {
     const v = this.opts.getVision();
@@ -228,24 +199,24 @@ export class ChaoxingEngine {
       this.setState('running');
 
       // ── 开跑前的能力自检 ──
-      // 这两条通道都「静默失能」过：多模态明明配好，日志却一直报
-      // 「未配置多模态通道」（调用参数漏传，没有编译错误）；答题通道到底
-      // 回退到了谁，也没人确认过。开跑先亮一次，省得对着一段看不出所以然
-      // 的日志猜——上两次排查都卡在这里。
+      // AI 通道「静默失能」过：多模态明明配好，日志却一直报「未配置」
+      // （调用参数漏传，没有编译错误）。开跑先亮一次，省得对着一段
+      // 看不出所以然的日志猜——前几次排查都卡在这里。
       //
-      // 「未配置」必须说清缺哪一半：密钥和地址是两个独立输入框，只填一个
-      // 是最高发的误配（设置页以前还只看 key 就显示「已配置」）。
-      const vch = this.visionChannel();
-      const ach = this.answerChannel();
+      // 现在只有一条通道（文本答题/看图解题/随堂弹题共用），所以只有
+      // 一个真相。「未配置」必须说清缺哪一半：密钥和地址是两个独立
+      // 输入框，只填一个是最高发的误配。
+      const ch = this.visionChannel();
       const v = this.opts.getVision();
       const missing: string[] = [];
       if (!v.apiKey) missing.push('API Key');
       if (!v.baseUrl) missing.push('接口地址');
-      const why = missing.length ? `未配置（缺 ${missing.join(' 和 ')}）` : '未配置';
       this.log(
         'info',
-        `AI 通道自检：答题=${ach ? `${ach.label}/${ach.model}` : why}` +
-          ` | 多模态=${vch ? `就绪/${vch.model}` : `${why}（图片题会留空）`}`
+        ch
+          ? `AI 通道自检：就绪（${ch.model}，答题与看图解题共用）`
+          : `AI 通道自检：未配置（缺 ${missing.join(' 和 ')}）——` +
+              '文本答题与图片题都会留空，请到设置填写'
       );
 
       for (const course of courses) {
@@ -485,12 +456,8 @@ export class ChaoxingEngine {
                 result = 'quiz_skip';
                 this.log('info', '    - AI 自动答题已关闭，跳过该测验');
               } else if (isQuiz) {
-                const qr = await handleQuiz(
-                  this.opts.page,
-                  this.hooks,
-                  this.opts.getDeepseekKey(),
-                  this.answerChannel(),
-                  {
+                // 唯一一条 AI 通道：文本答题与截图识判共用同一个多模态配置
+                const qr = await handleQuiz(this.opts.page, this.hooks, this.visionChannel(), {
                     tiku: this.tiku,
                     submitCoverRate: this.opts.getSubmitCoverRate(),
                     // 必须显式传：QuizOptions 里早就有这个字段，注释也写明

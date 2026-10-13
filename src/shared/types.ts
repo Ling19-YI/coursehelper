@@ -81,7 +81,6 @@ export interface RunSummary {
 }
 
 export interface AppSettings {
-  deepseekKey: string;
   autoResume: boolean;
   startMinimized: boolean;
   dataDir: string;
@@ -124,7 +123,6 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  deepseekKey: '',
   autoResume: true,
   startMinimized: false,
   dataDir: '',

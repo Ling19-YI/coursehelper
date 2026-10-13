@@ -27,10 +27,8 @@ export interface EngineHooks {
   answerPopup(): boolean;
   /** 是否因「验证类」弹窗（人脸/验证码/安全验证）暂停等人工。默认 false */
   autoPauseOnVerify(): boolean;
-  /** 文本搜题通道（多模态优先，其次 DeepSeek），弹窗与章节测验共用 */
+  /** 文本搜题与截图识判共用的 AI 通道（多模态配置），弹窗与章节测验都用它 */
   visionChannel(): AnswerChannel | null;
-  /** 文本搜题 key，仅用于兼容旧的单 key 调用 */
-  deepseekKey(): string;
   /** 本地题库：命中则不调 AI */
   tiku(): TikuStore | null;
   /** 交卷覆盖率闸门（0~1，0=关闭） */

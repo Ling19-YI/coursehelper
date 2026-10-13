@@ -1,57 +1,59 @@
 /**
- * 验证「只配了多模态、没配 DeepSeek」的场景能正确走通。
- * 用户反馈：配置了多模态，答题却提示「未配置 DeepSeek API Key」。
+ * 验证 AI 通道选择逻辑：只有多模态一条，且密钥与地址必须同时存在。
+ *
+ * 历史背景：曾经有第二条通道（旧版 DeepSeek 单密钥回退），造成
+ * 「本地可以、用户无解」——两条路径配置真相不一致，其中一条还没有
+ * 界面能维护，失效时完全静默。双通道已整体移除，本测试锁住单通道语义。
  */
 
-function pickChannel(vision, deepseekKey) {
-  if (vision?.apiKey) {
+// 与 ChaoxingEngine.visionChannel() 保持一致的唯一实现
+function pickChannel(vision) {
+  if (vision?.apiKey && vision.baseUrl) {
     return { baseUrl: vision.baseUrl, apiKey: vision.apiKey, model: vision.model, label: '多模态' };
-  }
-  if (deepseekKey) {
-    return { baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey, model: 'deepseek-chat', label: 'DeepSeek' };
   }
   return null;
 }
 
 const cases = [
   {
-    name: '用户报告的场景：只配了多模态',
+    name: '密钥与地址都配了：唯一通道就绪',
     vision: { baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test-placeholder', model: 'mimo-v2.6-flash' },
-    deepseekKey: '',
     expect: '多模态',
   },
   {
-    name: '只配了 DeepSeek（老用户）',
-    vision: { baseUrl: 'https://api.example.com/v1', apiKey: '', model: 'mimo-v2.6-flash' },
-    deepseekKey: 'sk-ds-key',
-    expect: 'DeepSeek',
-  },
-  {
-    name: '两个都配了：应优先多模态',
-    vision: { baseUrl: 'https://gateway/v1', apiKey: 'sk-vision', model: 'mimo' },
-    deepseekKey: 'sk-ds',
-    expect: '多模态',
-  },
-  {
-    name: '都没配：应返回 null 并提示未配置',
-    vision: { baseUrl: 'https://gateway/v1', apiKey: '', model: 'mimo' },
-    deepseekKey: '',
+    name: '只配了密钥、地址为空：必须是 null（静默失能事故的根源）',
+    vision: { baseUrl: '', apiKey: 'sk-only-key', model: 'mimo-v2.6-flash' },
     expect: null,
+  },
+  {
+    name: '只配了地址、密钥为空：必须是 null',
+    vision: { baseUrl: 'https://gateway/v1', apiKey: '', model: 'mimo' },
+    expect: null,
+  },
+  {
+    name: '都没配：null',
+    vision: { baseUrl: '', apiKey: '', model: 'mimo' },
+    expect: null,
+  },
+  {
+    name: '地址带尾斜杠：不影响通道建立（fetch 时会归一化）',
+    vision: { baseUrl: 'https://gateway/v1/', apiKey: 'sk-x', model: 'mimo' },
+    expect: '多模态',
   },
 ];
 
-console.log('=== 通道选择逻辑 ===');
+console.log('=== AI 通道选择逻辑（单通道）===');
 let pass = 0;
 for (const c of cases) {
-  const ch = pickChannel(c.vision, c.deepseekKey);
+  const ch = pickChannel(c.vision);
   const got = ch ? ch.label : null;
   const ok = got === c.expect;
   if (ok) pass++;
   console.log(`  [${ok ? '✓' : '✗'}] ${c.name}`);
   console.log(`      期望 ${c.expect}，实得 ${got}`);
   if (ch) {
-    console.log(`      → ${ch.baseUrl}/chat/completions`);
-    console.log(`      → model=${ch.model}`);
+    console.log(`      → ${ch.baseUrl.replace(/\/$/, '')}/chat/completions`);
+    console.log(`      → model=${ch.model}（文本答题与看图解题共用）`);
   }
 }
 

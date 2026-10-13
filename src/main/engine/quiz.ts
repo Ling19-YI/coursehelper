@@ -786,12 +786,16 @@ export interface QuizOutcome {
  *   2. 本地题库 tiku.json → 不花钱
  *   3. AI 通道 → 花钱
  *   4. 都拿不到 → 留空，由覆盖率闸门决定要不要交卷
+ *
+ * AI 通道只有一条：多模态配置（key + 地址 + 模型）。文本答题与看图解题
+ * 共用它——多模态模型本身就能读文本，不值得为纯文本再养第二条通道。
+ * 以前这里有第二条（旧版 DeepSeek Key 回退），正是「本地可以、用户无解」
+ * 的根源：两条路径的配置真相不一致，其中一条还没有界面能维护。
  */
 export async function handleQuiz(
   page: Page,
   h: EngineHooks,
-  apiKey: string | undefined,
-  ch?: AnswerChannel | null,
+  ch: AnswerChannel | null,
   opts?: QuizOptions
 ): Promise<QuizOutcome> {
   h.log('info', '    \u2192 \u68c0\u6d4b\u5230\u7b54\u9898\u9875\u9762');
@@ -843,15 +847,12 @@ export async function handleQuiz(
     const chain: Searcher[] = [];
     if (store) chain.push(new CacheSearcher(store));
 
-    const channel: AnswerChannel | null = ch
-      ? ch
-      : apiKey
-        ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
-        : null;
-    if (!channel?.apiKey) {
+    // 唯一一条 AI 通道：多模态配置。没有就是没有，不再回退到任何
+    // 第二密钥——「配了却没生效」的静默事故全是双通道时代留下的。
+    if (!ch?.apiKey) {
       h.log('warn', '    \u26a0 \u672a\u914d\u7f6e AI \u63a5\u53e3\uff08\u8bbe\u7f6e \u2192 \u591a\u6a21\u6001 API Key\uff0c\u5730\u5740\u548c\u5bc6\u94a5\u90fd\u8981\u586b\uff09');
     } else {
-      chain.push(new LlmSearcher(channel));
+      chain.push(new LlmSearcher(ch));
     }
 
     if (!chain.length) {

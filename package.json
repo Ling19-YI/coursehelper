@@ -15,9 +15,10 @@
     "spike": "node scripts/spike.mjs",
     "test:answer": "tsx scripts/test-answer-chain.ts",
     "test:vision": "tsx scripts/test-vision-answer.ts",
-    "test": "npm run typecheck && npm run test:answer && npm run test:vision && npm run test:popup && npm run test:ai-silent",
+    "test": "npm run typecheck && npm run test:answer && npm run test:vision && npm run test:popup && npm run test:ai-silent && npm run test:channel",
     "test:popup": "tsx scripts/test-video-popup.ts",
-    "test:ai-silent": "tsx scripts/test-ai-silent-failure.ts"
+    "test:ai-silent": "tsx scripts/test-ai-silent-failure.ts",
+    "test:channel": "node scripts/test-channel.mjs"
   },
   "devDependencies": {
     "@ant-design/icons": "^6.3.4",

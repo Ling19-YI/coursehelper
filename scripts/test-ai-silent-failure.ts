@@ -116,6 +116,45 @@ check(
   '缺 Inline 提示'
 );
 
+// ---- 7. 单通道 Consolidation：不允许第二条密钥路径复活 ----
+// 双通道（多模态 + 旧版 DeepSeek 回退）是「本地可以、用户无解」的根源：
+// 两条路径配置真相不一致，其中一条还没有界面能维护。现在只许多模态一条。
+check(
+  'EngineOptions 不再有 getDeepseekKey',
+  !/getDeepseekKey/.test(index),
+  '双通道入口复现'
+);
+check(
+  'hooks 接口不再有 deepseekKey',
+  !/deepseekKey/.test(read('hooks.ts')),
+  'hooks 双通道残留'
+);
+check(
+  'ipc 不再接线 getDeepseekKey',
+  !/getDeepseekKey/.test(ipc),
+  'ipc 双通道残留'
+);
+check(
+  'quiz.ts 不再有 apiKey 参数与 DeepSeek 兜底',
+  !/apiKey\?: string/.test(quiz) && !/api\.deepseek\.com/.test(quiz),
+  'handleQuiz 第二通道兜底复现'
+);
+check(
+  'types.ts 不再有 deepseekKey 字段',
+  !/deepseekKey/.test(readRoot('src/shared/types.ts')),
+  '设置类型双字段残留'
+);
+check(
+  'store 启动时剥掉磁盘上的旧密钥字段',
+  /delete \(this\.settings as Record<string, unknown>\)\.deepseekKey/.test(readRoot('src/main/store.ts')),
+  '升级用户的残留字段会永驻'
+);
+check(
+  '自检只有一条通道的表述',
+  /AI 通道自检：就绪（/.test(index) && !/答题=.*多模态=/.test(index),
+  '自检仍在分报两条通道'
+);
+
 if (failed) {
   console.error(`\n${failed} 项断言失败`);
   process.exit(1);

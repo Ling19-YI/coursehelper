@@ -142,6 +142,14 @@ export class Store {
   /** 从旧命令行版本迁移凭证与进度（一次性） */
   private migrateLegacy() {
     try {
+      // 旧版 DeepSeek 单密钥通道已整体移除（答题/看图/弹题统一走多模态一条）。
+      // 磁盘上的残留字段会被上面的 spread 合并进来、之后每次保存都跟着
+      // 回写，永驻不掉。这里一次性剥掉，让 settings.json 回到单一真相。
+      if ('deepseekKey' in this.settings) {
+        delete (this.settings as Record<string, unknown>).deepseekKey;
+        this.saveSettings();
+        console.log('[store] 已移除旧版 DeepSeek 密钥字段（AI 通道统一为多模态）');
+      }
       const legacyRoot = firstExistingLegacy();
       if (!legacyRoot) return;
       const legacyCreds = path.join(legacyRoot, 'credentials.json');
