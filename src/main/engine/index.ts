@@ -119,13 +119,17 @@ export class ChaoxingEngine {
     if (v?.apiKey && v.baseUrl) {
       return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model, label: '多模态' };
     }
+    // 旧版遗留回退：设置界面早就删了 DeepSeek 专栏，但这个字段还留在
+    // settings.json 里被读。从旧版升级来的用户一直靠这条 invisible 路径
+    // 答题（本地能跑、用户报「无解」的差异就有它一份），密钥过期时同样
+    // 静默失效，而设置里没地方换。label 写明来源，让自检日志能指路。
     const dk = this.opts.getDeepseekKey();
     if (dk) {
       return {
         baseUrl: 'https://api.deepseek.com/v1',
         apiKey: dk,
         model: 'deepseek-chat',
-        label: 'DeepSeek',
+        label: 'DeepSeek（旧版密钥，建议改配多模态）',
       };
     }
     return null;
