@@ -281,11 +281,11 @@ footer{
   <div class="nav-l">
     <img src="assets/icon.png" alt="">
     刷课助手
-    <span>v2.1.1</span>
+    <span>v2.1.2</span>
   </div>
   <div class="nav-r">
     <a class="nav-btn" href="https://gitcode.com/2603_95808828/coursehelp" target="_blank" rel="noopener">源码</a>
-    <a class="nav-btn primary" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.1/CourseHelper-Setup-2.1.1.exe">下载</a>
+    <a class="nav-btn primary" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.2/CourseHelper-Setup-2.1.2.exe">下载</a>
   </div>
 </nav>
 
@@ -300,7 +300,7 @@ footer{
     </p>
 
     <div class="cta-row">
-      <a class="cta" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.1/CourseHelper-Setup-2.1.1.exe">
+      <a class="cta" href="https://gitcode.com/2603_95808828/coursehelp/releases/download/v2.1.2/CourseHelper-Setup-2.1.2.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 3v13M6 11l6 6 6-6M5 21h14"/>
         </svg>
@@ -310,7 +310,7 @@ footer{
         <span class="k">110 MB</span> · Windows 10 / 11 (64 位)
       </div>
       <div class="cta-alt">
-        GitHub 打不开？<a href="https://github.com/Ling19-YI/coursehelper/releases/tag/v2.1.1" target="_blank" rel="noopener">备用渠道</a>
+        GitHub 打不开？<a href="https://github.com/Ling19-YI/coursehelper/releases/tag/v2.1.2" target="_blank" rel="noopener">备用渠道</a>
       </div>
     </div>
   </div>
@@ -375,22 +375,18 @@ footer{
 <section class="wrap">
   <div class="sec-head rise">
     <div class="sec-tag">更新日志</div>
-    <h2>v2.1.1</h2>
-    <p>2026-10-13 · AI 答题、扫码弹窗与混合章节修复</p>
+    <h2>v2.1.2</h2>
+    <p>2026-10-13 · 接口地址填错的自动纠正</p>
   </div>
   <div class="log rise">
     <div class="log-head">
-      <span class="log-ver">v2.1.1</span>
+      <span class="log-ver">v2.1.2</span>
       <span class="log-date">2026-10-13</span>
     </div>
     <ul>
-      <li><b>AI 答题配好了却一直「无解」</b>：失败原因上浮、输出预算一开始给足、配置判定一致——本地能跑、用户不行的根因修掉</li>
-      <li><b>扫码/人脸弹窗的二维码一直被刷新</b>：程序自己的保活动作在页面里继续动，现在人工介入期间彻底停住；弹窗要连续几秒不出现才算处理完</li>
-      <li><b>一章里同时有视频、文档、测验时只做测验</b>：现在按当前任务点分派，依次做完</li>
-      <li><b>被平台风控拦截时假装「任务完成」</b>：现在如实停下并说明原因，不再把剩余课程全标成跳过</li>
-      <li>新增<b>手动切换章节</b>：刷课中点了别的章节，就从你点的那一节接着刷</li>
-      <li>修复<b>在线更新的备用下载源失效</b>（GitCode 源从未成功过，本版修复）</li>
-      <li>移除无界面可维护的旧版 DeepSeek 备用通道</li>
+      <li><b>接口地址填成「完整接口路径」时一直报接口 400</b>：把服务商文档里的完整地址（以 <code>/chat/completions</code> 结尾）整段粘进来时，请求路径会多拼一截。现在保存时自动纠正，<b>已经填错的旧配置不用重填也会被自动修正</b></li>
+      <li><b>接口报错会带上服务端原文</b>：除密钥无效外，其他失败会把服务端返回的报错写进日志，「地址填错」「模型名不存在」一眼可分</li>
+      <li>设置页补上接口地址的填写说明，并新增可回退的发布说明同步校验</li>
     </ul>
   </div>
 </section>
@@ -425,6 +421,10 @@ footer{
     <details>
       <summary>AI 答题需要自己配置吗？</summary>
       <div class="faq-body">需要。设置页填一个多模态模型的接口地址和 Key，要求兼容 OpenAI 的 <code>chat/completions</code>。不配也能用，只是不答题——视频和文档任务点照常完成。</div>
+    </details>
+    <details>
+      <summary>接口地址该怎么填？</summary>
+      <div class="faq-body">填到 <code>/v1</code>、<code>/v4</code> 这一层为止，例如 <code>https://api.deepseek.com/v1</code>。别填服务商文档里的完整路径（以 <code>/chat/completions</code> 结尾）——v2.1.2 起软件会自动纠正，但填对更省事。</div>
     </details>
     <details>
       <summary>答题准确率怎么样？</summary>

@@ -19,7 +19,7 @@
 
 ## 下载安装
 
-1. 从 [GitHub Releases](https://github.com/Ling19-YI/coursehelper/releases/latest) 下载 `CourseHelper-Setup-2.1.1.exe`（约 110 MB，Windows 10/11 x64）。GitHub 访问不畅时，改从 [GitCode Releases](https://gitcode.com/2603_95808828/coursehelp/-/releases) 下载同名文件——两个平台的产物与版本完全一致
+1. 从 [GitHub Releases](https://github.com/Ling19-YI/coursehelper/releases/latest) 下载 `CourseHelper-Setup-2.1.2.exe`（约 110 MB，Windows 10/11 x64）。GitHub 访问不畅时，改从 [GitCode Releases](https://gitcode.com/2603_95808828/coursehelp/-/releases) 下载同名文件——两个平台的产物与版本完全一致
 2. 首次运行 Windows SmartScreen 可能提示「已保护你的电脑」——这是**未购买代码签名证书**导致的正常现象，点「更多信息 → 仍要运行」即可
 3. 安装后**直接使用，无需激活码、无需登录**
 

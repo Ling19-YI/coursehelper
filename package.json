@@ -1,7 +1,7 @@
 {
   "name": "coursehelper",
   "productName": "刷课助手 CourseHelper",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "超星学习通自动刷课助手",
   "main": "app/dist/main/index.js",
   "license": "UNLICENSED",
@@ -15,7 +15,8 @@
     "spike": "node scripts/spike.mjs",
     "test:answer": "tsx scripts/test-answer-chain.ts",
     "test:vision": "tsx scripts/test-vision-answer.ts",
-    "test": "npm run typecheck && npm run test:answer && npm run test:vision && npm run test:popup && npm run test:ai-silent && npm run test:channel && npm run test:mixed && npm run test:switch && npm run test:budget",
+    "test": "npm run typecheck && npm run test:baseurl && npm run test:answer && npm run test:vision && npm run test:popup && npm run test:ai-silent && npm run test:channel && npm run test:mixed && npm run test:switch && npm run test:budget",
+    "test:baseurl": "tsx scripts/test-baseurl.ts",
     "test:popup": "tsx scripts/test-video-popup.ts",
     "test:ai-silent": "tsx scripts/test-ai-silent-failure.ts",
     "test:budget": "tsx scripts/test-reasoning-budget.ts",

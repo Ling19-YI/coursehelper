@@ -231,7 +231,7 @@ AUTH=$(printf 'x-access-token:%s' "$(cat 'C:/Users/colorful/.coursehelper-github
 git -c "http.extraHeader=Authorization: Basic $AUTH" push origin main
 
 # GitCode
-GC_TOKEN="$(cat 'C:/Users/colorful/.coursehelper-gitcode-token')" node scripts/local-gc-release.mjs v2.1.1
+GC_TOKEN="$(cat 'C:/Users/colorful/.coursehelper-gitcode-token')" node scripts/local-gc-release.mjs v2.1.2
 ```
 
 **三条硬规则**：
@@ -337,6 +337,24 @@ node scripts/local-preflight.mjs 2.0.0
 - 改动前先读现有代码，沿用既有模式
 - 不擅自 `git push --force` 到 main
 
+### 发布说明只有一份（2026-10-13 加的工具）
+
+`node scripts/sync-release-notes.mjs <版本> [--check]`：把 `docs/v<版本>发布说明.md`
+的「发布说明正文」段写进两个发布脚本的内嵌 `notes`，并逐字比对两平台是否一致。
+**不要在两个脚本里各手写一份**——历史上两次「两平台说明不同步」就是这么来的。
+GitCode 的 release 建完无法用 API 改，说明必须先写对。
+
+### 接口地址的清洗（改 AI 通道前必读）
+
+用户高频错误：把服务商文档里的**完整接口路径**（以 `/chat/completions` 结尾）整段填进
+「接口地址」。我们调用时会再拼一次 → `…/chat/completions/chat/completions` →
+服务端回 `No static resource …` 的 400。2026-10-13 两位用户反馈同款。
+
+所以：**任何用到 `visionBaseUrl` 的地方都要过 `src/shared/baseUrl.ts` 的
+`normalizeBaseUrl()`**，不要在 fetch 处只做 `.replace(/\/$/, '')`。当前三处已覆盖：
+`ipc.ts` 的 `settings:set`（保存侧纠正）与 `getVision`、`engine/index.ts` 的
+`visionChannel`（兜底，让老配置无需重新保存也生效）。
+
 ### 视频相关
 
 拍视频前必读 `docs/视频拍摄指南.md`。要点：
@@ -350,8 +368,8 @@ node scripts/local-preflight.mjs 2.0.0
 
 ## 九、当前状态（2026-10-13）
 
-- 最新发布：**v2.1.1**（发布说明唯一来源：`docs/v2.1.1发布说明.md`，
-  两个发布脚本的内嵌 notes 均由它生成）
+- 最新发布：**v2.1.2**（发布说明唯一来源：`docs/v2.1.2发布说明.md`，
+  两个发布脚本的内嵌 notes 由 `node scripts/sync-release-notes.mjs 2.1.2` 同步生成）
 - `feat/quiz-answering` 已并入 `main`，该分支保留未删
 - `main` 已包含：
   - **章节测验 AI 答题**：纯文本答案链 + 本地题库沉淀 + 交卷覆盖率闸门
@@ -359,6 +377,14 @@ node scripts/local-preflight.mjs 2.0.0
   - **视频随堂弹题**：按真实 DOM 契约实现，设置项 `answerPopup` 默认**关闭**
   - 视频静音开关、扫码/验证码/人脸弹窗检测（命中即停所有模拟动作）
   - 双源更新、换账号修复、收款码更新
+- **v2.1.2 主要变化**（面向用户的完整说明在 `docs/v2.1.2发布说明.md`，热修版）：
+  - **接口地址自动纠正**：`src/shared/baseUrl.ts` 的 `normalizeBaseUrl()` 剥掉整段
+    粘贴带来的 `/chat/completions` 结尾、尾斜杠与误粘引号；保存侧（`settings:set`）、
+    读取侧（`getVision`）、通道侧（`visionChannel`）三处生效，**老配置不用重新保存**
+  - **接口报错带上服务端原文**（非 401 时取响应体前 140 字），这类 400 才有可诊断线索
+  - 设置页补地址填写说明；落地页 FAQ 加「接口地址该怎么填」
+  - 新增 `scripts/sync-release-notes.mjs`（发布说明单源同步 + 两平台逐字校验）
+  - 新增 `scripts/test-baseurl.ts`（10 用例，已挂进 `npm test`）
 - **v2.1.1 主要变化**（面向用户的完整说明在 `docs/v2.1.1发布说明.md`）：
   - **AI 答题「无解」四层根因**：失败不上浮 / 输出预算一开始给足（16000，
     推理吃光自动升档 32000 重试）/ 配置判定一致 / 自检列明缺什么
@@ -382,6 +408,9 @@ node scripts/local-preflight.mjs 2.0.0
   `image_url`（实测 mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v /
   glm-5v-turbo 可用）。纯文本模型不吃图，会返回空答案而不是报错
 - 已知限制：各校题目结构差异大，答题准确率无法保证
+- **仍未修的已知问题（v2.1.3 候选）**：截图识别的答案与 DOM 选项**错配**——
+  实测 5 题只存活 1 题，其余被覆盖率闸门以「选项不在范围内」丢弃。属于
+  「答案对但映射错位」，不是模型答错。
 
 ### 超星页面形态的坑（改 quiz.ts / blocker.ts 前必读）
 
