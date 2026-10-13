@@ -14,6 +14,7 @@ import {
 import { Switch, Tooltip } from 'antd';
 import { SaveOutlined, LogoutOutlined, FolderOpenOutlined } from '@ant-design/icons';
 import { useApp } from '../state';
+import { normalizeBaseUrl } from '../../shared/baseUrl';
 
 export default function Settings() {
   const a = useApp();
@@ -85,6 +86,10 @@ export default function Settings() {
         await window.ch.setVision(visionKey.trim());
         setVisionKey('');
       }
+      // 保存侧纠正：允许用户直接粘贴服务商文档里的完整接口路径
+      // （…/chat/completions），存盘前去掉尾巴；输入框同步显示纠正后的值。
+      const cleanedBaseUrl = normalizeBaseUrl(visionBaseUrl);
+      setVisionBaseUrl(cleanedBaseUrl);
       await a.saveSettings({
         dataDir: dataDir.trim(),
         videoSpeed: speed,
@@ -93,7 +98,7 @@ export default function Settings() {
         answerPopup: popupOn,
         autoPauseOnVerify: pauseOnVerify,
         muted,
-        visionBaseUrl: visionBaseUrl.trim(),
+        visionBaseUrl: cleanedBaseUrl,
         visionModel: visionModel.trim() || 'mimo-v2.5',
       });
       window.ch.getVision().then(setVisionInfo).catch(() => {});
@@ -186,6 +191,10 @@ export default function Settings() {
             onChange={e => setVisionBaseUrl(e.target.value)}
             autoComplete="off"
           />
+          <div className="muted" style={{ fontSize: 12 }}>
+            填服务商文档给的 Base URL（一般以 /v1、/v4 结尾）。直接粘贴完整接口路径（以
+            /chat/completions 结尾）也可以，保存时会自动纠正。
+          </div>
           {(visionInfo.configured || visionKey.trim()) && !visionBaseUrl.trim() && (
             <div style={{ color: '#faad14', fontSize: 12 }}>
               ⚠ 接口地址为空：密钥已保存但 AI 答题不会被调用（文本答题和看图答题都用这个地址）

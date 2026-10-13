@@ -4,6 +4,7 @@ import * as path from 'path';
 import { ChaoxingEngine } from './engine';
 import type { Store } from './store';
 import { DEFAULT_SETTINGS } from '../shared/types';
+import { normalizeBaseUrl } from '../shared/baseUrl';
 import type { Session } from './session';
 import type { Course, EngineEvent } from '../shared/types';
 import type { AppInfo } from '../shared/api';
@@ -45,7 +46,9 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
         // 兜底一律取 DEFAULT_SETTINGS，不要在这里另写一份模型名默认值。
         // 这里曾经漏写成 mimo-v2.6-flash——用户在设置里把模型清空时会命中它，
         // 而它带图请求必 500，等于「清空模型 = 静默失能」。
-        baseUrl: store.settings.visionBaseUrl || DEFAULT_SETTINGS.visionBaseUrl,
+        // normalizeBaseUrl 兜底：老版本存进来的脏地址（带 /chat/completions），
+        // 用户不重新保存也能被纠正。
+        baseUrl: normalizeBaseUrl(store.settings.visionBaseUrl || DEFAULT_SETTINGS.visionBaseUrl),
         apiKey: store.loadVisionKey() ?? '',
         model: store.settings.visionModel || DEFAULT_SETTINGS.visionModel,
       }),
@@ -112,6 +115,11 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
 
   ipcMain.handle('settings:get', () => store.settings);
   ipcMain.handle('settings:set', (_ev, patch: Record<string, unknown>) => {
+    // 接口地址在保存侧就纠正：高频错误是把服务商文档里的完整接口路径
+    // （…/chat/completions）整段粘进来，引擎再拼一次必然 400。
+    if (typeof patch.visionBaseUrl === 'string') {
+      patch.visionBaseUrl = normalizeBaseUrl(patch.visionBaseUrl);
+    }
     const prevDir = store.settings.dataDir;
     store.saveSettings(patch);
     if (patch.dataDir && patch.dataDir !== prevDir && engine?.isRunning) {

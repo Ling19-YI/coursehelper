@@ -218,7 +218,15 @@ async function callOnce(cfg: VisionConfig, list: ShotInput[], _opts: any, body: 
   clearTimeout(timer);
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   if (!resp.ok) {
-    throw new Error(`视觉接口 ${resp.status}${resp.status === 401 ? '（key 无效）' : ''}`);
+    // 401 有明确含义；其余状态把服务端的报错原文带上——
+    // 「No static resource …」这类信息是定位「地址填错」的唯一线索，
+    // 只报状态码的话用户和客服都无从下手。
+    if (resp.status === 401) throw new Error('视觉接口 401（key 无效）');
+    let detail = '';
+    try {
+      detail = (await resp.text()).replace(/\s+/g, ' ').trim().slice(0, 140);
+    } catch {}
+    throw new Error(`视觉接口 ${resp.status}${detail ? `：${detail}` : ''}`);
   }
   let json: any;
   try {

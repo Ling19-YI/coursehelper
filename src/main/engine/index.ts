@@ -39,6 +39,7 @@ import {
   lastPickedVideoSrc,
 } from './video';
 import type { ChapterResult } from '../../shared/types';
+import { normalizeBaseUrl } from '../../shared/baseUrl';
 import type { EngineHooks } from './hooks';
 
 export interface EngineOptions {
@@ -135,7 +136,14 @@ export class ChaoxingEngine {
   private visionChannel(): AnswerChannel | null {
     const v = this.opts.getVision();
     if (v?.apiKey && v.baseUrl) {
-      return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model, label: '多模态' };
+      // normalizeBaseUrl：设置页保存侧已纠正一次，这里再兜底一次，
+      // 覆盖「老版本存盘的脏地址」——用户不重新保存设置也能生效。
+      return {
+        baseUrl: normalizeBaseUrl(v.baseUrl),
+        apiKey: v.apiKey,
+        model: v.model,
+        label: '多模态',
+      };
     }
     return null;
   }
