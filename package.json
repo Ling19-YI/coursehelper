@@ -23,6 +23,7 @@
     "test:mixed-dom": "tsx scripts/test-mixed-chapter-dom.ts",
     "test:switch": "tsx scripts/test-manual-switch.ts",
     "test:switch-dom": "tsx scripts/test-manual-switch-dom.ts",
+    "test:block-dom": "tsx scripts/test-manual-block-ticker.ts",
     "test:e2e": "tsx scripts/e2e-real-engine.ts",
     "test:channel": "node scripts/test-channel.mjs"
   },

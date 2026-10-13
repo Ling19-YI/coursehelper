@@ -24,6 +24,7 @@ import {
   readCurrentChapterId,
   type Chapter,
 } from './chaoxing';
+import { detectManualBlock } from './blocker';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
 import { activeJob, jobKindLabel } from './jobpoint';
@@ -330,6 +331,10 @@ export class ChaoxingEngine {
     // 平台「今日任务点完成数已达上限」——命中后视频照放但不记完成，
     // 继续跑纯空转。用一个标志让它能中止整轮并在收尾时说明原因。
     let dailyLimitHit = false;
+    // 页面被平台风控接管（antispiderShowVerify 之类）后，本轮的「进不去章节」
+    // 全是同一个原因，继续遍历只会把剩下的每一节都标成「跳过」——实机见过
+    // 「已完成 0 个 / 跳过 11 个」还报「🎉 任务完成」。用标志中止整轮并说明。
+    let riskBlocked = false;
 
     try {
       if (!(await this.ensureLogin(creds))) return summary;
@@ -358,6 +363,8 @@ export class ChaoxingEngine {
 
       for (const course of courses) {
         this.ctl.throwIfStopped();
+        // 被平台风控接管后，换一门课也一样进不去（整个会话都被盯上了）
+        if (riskBlocked) break;
         this.log('info', `\n════ ${course.name} ════`);
 
         const { chapters, platform } = await openCourseChapters(this.opts.page, this.hooks, course);
@@ -587,6 +594,17 @@ export class ChaoxingEngine {
             }
           }
           if (!entered) {
+            // 「进不去这一节」未必是章节的问题：页面被风控页接管时，目录 frame
+            // 根本不会出现，后面每一节都会这样失败。这种时候标「跳过」并按
+            // 「任务完成」收尾是**假成功**——用户以为刷完了，其实一个都没做。
+            // 命中风控就直接中止整轮，把原因和该做什么说清楚。
+            const guarded = await detectManualBlock(this.opts.page, this.hooks.autoPauseOnVerify());
+            if (guarded) {
+              riskBlocked = true;
+              this.log('warn', `    ⚠ 页面被平台风控接管（${guarded.kind}）：${guarded.matched}`);
+              this.log('warn', `      ${guarded.hint}`);
+              break;
+            }
             summary.skipped++;
             this.log('warn', '    ⚠ 未能进入该章节，跳过');
             this.emit({
@@ -866,10 +884,18 @@ export class ChaoxingEngine {
 
       this.setState('done');
       this.emit({ type: 'task-done', ...summary, ts: Date.now() });
-      this.log(
-        'ok',
-        `🎉 任务完成！已完成 ${summary.completed} 个 / 跳过 ${summary.skipped} 个`
-      );
+      if (riskBlocked) {
+        this.log(
+          'warn',
+          `⚠ 本轮被平台风控中断（不是任务完成）：已完成 ${summary.completed} 个 / 跳过 ${summary.skipped} 个。` +
+            '请在聊天窗口右侧的学习通页面上手动完成验证，然后重新开始任务。'
+        );
+      } else {
+        this.log(
+          'ok',
+          `🎉 任务完成！已完成 ${summary.completed} 个 / 跳过 ${summary.skipped} 个`
+        );
+      }
       if (dailyLimitHit) {
         this.log(
           'warn',

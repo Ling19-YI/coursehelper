@@ -199,6 +199,12 @@ export const SPY_JS = `(() => {
     setInterval(function () {
       try {
         if (window.__kaPaused) return;
+        // 人工介入（扫码/验证码/人脸/平台风控页）期间必须**彻底**静默。
+        // 平台是按「环境有没有变化」决定要不要刷新二维码的，ticker 若继续
+        // 派发 mousemove/focus，日志上写着「已暂停自动操作」，二维码却在被
+        // 自己的保活事件一遍遍刷新，用户永远扫不上。
+        // 标志由主进程的 setManualBlock 写入。
+        if (window.__kaBlocked) return;
         const doc = window.document;
         // 只驱动「当前目标」那一个视频。
         // 旧实现把页面上所有 <video> 全量拉起：同一章节页里并列多个任务点的
@@ -274,6 +280,35 @@ export async function setMediaPlayback(page: Page, play: boolean): Promise<void>
           } catch (e) {}
         }
       }, play);
+    } catch {}
+  }
+}
+
+/**
+ * 人工介入（扫码/验证码/人脸/平台风控页）期间，让**页面内**的保活 ticker 彻底让位。
+ *
+ * 为什么必须有这个：`SPY_JS` 的 ticker 是注入到页面里的，主进程一侧的「暂停」
+ * （`ctl.sleep` 空转）只停掉了主进程的动作——`page.mouse.move` / `forcePlay` /
+ * 兜底点击——而 ticker 仍在每 300ms 派发 `mousemove/mouseover/mouseenter` 与
+ * `focus/focusin`，并顺手把视频拉起来。而平台正是按「环境是否有变化」判断要不要
+ * 刷新二维码的。于是出现一个很反直觉的现象：日志写着「已暂停自动操作」，二维码
+ * 却在被**自己的保活事件**持续刷新，用户永远扫不上。
+ *
+ * 实机证据（2026-10-13 22:26:06 / 22:28:30 两轮）：
+ *   ⚠ 检测到扫码弹窗：人脸信息采集…
+ *   ⚠ 已暂停自动操作，处理完成后会自动继续
+ *   ✓ 弹窗已处理，恢复自动播放        ← 仅 26 秒后，用户根本没来得及扫
+ *
+ * ⚠️ 调用方应在**每一轮轮询里重申**，而不是只在进入弹窗时设一次：平台重挂
+ * iframe 后新文档里没有这个标志，ticker 会立刻恢复派发事件——那正是二维码被
+ * 刷新的时刻。`setManualBlock(page, false)` 恢复。
+ */
+export async function setManualBlock(page: Page, blocked: boolean): Promise<void> {
+  for (const frame of page.frames()) {
+    try {
+      await frame.evaluate((b: boolean) => {
+        (window as any).__kaBlocked = b;
+      }, blocked);
     } catch {}
   }
 }

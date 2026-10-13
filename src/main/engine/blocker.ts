@@ -170,21 +170,48 @@ async function detectInFrame(frame: Frame, allowVerify: boolean): Promise<BlockI
 }
 
 /**
+ * 平台风控/验证页的地址特征。
+ *
+ * 被踢到这类页面时是**整页跳转**，页面上往往没有可读的弹层文案，按弹层文本
+ * 一个都查不出来；但引擎在这一页上什么也做不了——继续「回目录 → 点章节」只会
+ * 反复失败，最后把剩余章节全部跳过，还报一句「🎉 任务完成」（实机 22:26–22:29
+ * 连续三轮：已完成 0 个 / 跳过 11 个）。这是**假成功**，比停下来更糟。
+ *
+ * 用 URL 判定不吃「课程正文含这些词」的误判（正文进不了地址栏），因此
+ * **不受 autoPauseOnVerify 门控**，一律视为需人工介入。
+ */
+const VERIFY_URL_RE = /antispider|ShowVerify|verify\.ac/i;
+
+/**
  * 检测当前页面是否被「需要人工处理」的弹窗挡住。
  *
  * 场景：某些课程播放中会弹出手机扫码、验证码、人脸识别。
  * 命中时引擎必须停止一切模拟动作（鼠标移动、事件派发、点击播放按钮），
  * 否则二维码会被判定为环境变化而反复刷新，用户永远扫不上。
+ * ⚠️ 光停主进程不够——页面内还跑着一个 300ms 的保活 ticker，
+ * 调用方必须同时用 `setManualBlock` 让它让位（见 keepalive.ts）。
  *
  * @param allowVerify 是否也因「验证类」（人脸识别/验证码/安全验证）暂停。
  *   默认 false——这三类的误判代价太高，课程正文就含这些词，
  *   误判一次整轮刷课就停摆在等人。由设置项 autoPauseOnVerify 控制。
- *   扫码不受此开关影响，始终暂停。
+ *   扫码不受此开关影响，始终暂停；风控页按 URL 判定，同样始终暂停。
  */
 export async function detectManualBlock(
   page: Page,
   allowVerify = false
 ): Promise<BlockInfo | null> {
+  // 0) 先看地址栏：整页被风控接管时没有弹层可读，但同样必须交还用户
+  try {
+    const u = page.url();
+    if (VERIFY_URL_RE.test(u)) {
+      return {
+        kind: '安全验证',
+        matched: u.slice(0, 60),
+        hint: '页面已被平台风控接管，请在页面上手动完成验证',
+      };
+    }
+  } catch {}
+
   for (const frame of page.frames()) {
     const info = await detectInFrame(frame, allowVerify);
     if (info) return info;

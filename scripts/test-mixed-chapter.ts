@@ -241,6 +241,81 @@ check(
   '构建开启 keepNames 时这里会 ReferenceError，而调用方 catch 掉 → 静默「解析出 0 题」'
 );
 
+console.log('\n[实测发现：扫码弹窗期间保活 ticker 仍在派发事件，二维码被自己刷掉]');
+const keepalive = read('keepalive.ts');
+const blocker = read('blocker.ts');
+
+check(
+  '有 setManualBlock（把「人工介入」同步给页面内的 ticker）',
+  /export async function setManualBlock\(page: Page, blocked: boolean\)/.test(keepalive) &&
+    /__kaBlocked = b;/.test(keepalive),
+  '缺这个函数，页面内 ticker 无从得知该让位'
+);
+check(
+  'SPY_JS 的 300ms ticker 会因 __kaBlocked 整轮让位',
+  /if \(window\.__kaBlocked\) return;/.test(keepalive),
+  'ticker 只认 __kaPaused（只有用户点「暂停」才置），扫码期间继续派发 mousemove/focus → 二维码反复刷新'
+);
+check(
+  '视频循环每轮重申标志（覆盖平台重挂 iframe 后的新文档）',
+  /if \(block\) \{[\s\S]{0,400}?await setManualBlock\(page, true\);/.test(video),
+  '只在进入弹窗时设一次，导航后新文档里没有该标志，ticker 立刻复活'
+);
+check(
+  'waitForVideo 的入场检查也设标志',
+  /const pre = await detectManualBlock\(page, h\.autoPauseOnVerify\(\)\);[\s\S]{0,400}?await setManualBlock\(page, true\);/.test(
+    video
+  ),
+  '进场就弹窗时只停主进程，ticker 仍在刷二维码'
+);
+
+console.log('\n[实测发现：「弹窗消失一次」被当成「用户已处理」]');
+check(
+  '有 BLOCK_CLEAN_POLLS 常量',
+  /const BLOCK_CLEAN_POLLS = 3;/.test(video),
+  '缺常量说明又回到了「单轮命中即恢复」'
+);
+check(
+  'waitBlockGone 要求连续多轮查不到才返回 true',
+  /clean\+\+;[\s\S]{0,120}?clean >= BLOCK_CLEAN_POLLS/.test(video),
+  '单轮查不到就 return true，二维码重绘抖一下就被判成处理完了'
+);
+check(
+  '视频循环同样要求连续多轮才恢复',
+  /cleanPolls\+\+;[\s\S]{0,120}?cleanPolls >= BLOCK_CLEAN_POLLS/.test(video),
+  'announced 一置空就恢复动作 → 「暂停→刷新二维码→继续→刷新」振荡'
+);
+check(
+  '等待超时不解除静默',
+  /超时不解除静默/.test(video),
+  '超时后恢复保活，二维码立刻又开始被刷新'
+);
+
+console.log('\n[实测发现：风控页劫持被当成「正常但没目录」，还报任务完成]');
+check(
+  '按 URL 认风控页，且不受 autoPauseOnVerify 门控',
+  /const VERIFY_URL_RE = \/antispider\|ShowVerify\|verify\\\.ac\/i;/.test(blocker) &&
+    /VERIFY_URL_RE\.test\(u\)/.test(blocker),
+  '整页跳转没有可读弹层，按文本一个都查不出来'
+);
+check(
+  '进不去章节时先判风控，命中就中止整轮而不是标「跳过」',
+  /const guarded = await detectManualBlock\(this\.opts\.page, this\.hooks\.autoPauseOnVerify\(\)\);/.test(
+    index
+  ) && /riskBlocked = true;/.test(index),
+  '继续遍历会把剩下每节都标跳过，最后报「🎉 任务完成」——假成功'
+);
+check(
+  '风控中断时不报「任务完成」',
+  /if \(riskBlocked\) \{[\s\S]{0,400}?不是任务完成/.test(index),
+  '用户以为刷完了，其实一个都没做'
+);
+check(
+  '被风控后不再换课重试（整个会话都被盯上了）',
+  /if \(riskBlocked\) break;/.test(index),
+  '换课也一样进不去，纯空转'
+);
+
 if (failed) {
   console.error(`\n${failed} 项断言失败`);
   process.exit(1);

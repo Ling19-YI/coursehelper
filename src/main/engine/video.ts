@@ -1,20 +1,37 @@
 import type { Page, Frame } from 'playwright';
-import { forcePlay, wakeUp, installPauseSpy, setVideoRate } from './keepalive';
+import { forcePlay, wakeUp, installPauseSpy, setVideoRate, setManualBlock } from './keepalive';
 import { answerVideoPopup } from './videoQuiz';
 import type { EngineHooks } from './hooks';
 import { detectManualBlock } from './blocker';
 
 /**
- * 等待人工处理弹窗消失。
- * 期间不做任何模拟动作，避免二维码被反复刷新。
- * 超过上限仍未处理完则放弃本节，交还给用户。
+ * 「查不到弹窗」要连续这么多轮（每轮 2s）才算**真的**处理完。
+ *
+ * 只抖一轮就恢复动作是不行的：二维码每次重绘都会让弹层短暂消失，而恢复后的
+ * 动作（`page.mouse.move` + 页面内 ticker 的事件派发）又会被平台判定为环境变化
+ * → 二维码再次刷新 → 弹层再出现。于是「暂停→刷新→继续→刷新」无限振荡，
+ * 用户永远扫不上。实机两轮都只隔 26 秒就自称「弹窗已处理」。
  */
-async function waitBlockGone(page: Page, h: EngineHooks, maxMs = 180000): Promise<boolean> {
+const BLOCK_CLEAN_POLLS = 3;
+
+/**
+ * 等待人工处理弹窗消失。
+ * 期间不做任何模拟动作，并让页面内的保活 ticker 一起静默，避免二维码被反复刷新。
+ * 超过上限仍未处理完则放弃本节，交还给用户。
+ *
+ * 导出是为了能被真实 DOM 测试直接驱动（`scripts/test-manual-block-ticker.ts`
+ * 验证「弹层短暂消失」不会被当成「用户处理完了」）。
+ */
+export async function waitBlockGone(page: Page, h: EngineHooks, maxMs = 180000): Promise<boolean> {
   const end = Date.now() + maxMs;
   let mins = -1;
+  let clean = 0;
   while (Date.now() < end) {
     await h.ctl.sleep(2000);
     if (await detectManualBlock(page, h.autoPauseOnVerify())) {
+      clean = 0;
+      // 每轮重申：平台重挂 iframe 后新文档里没有这个标志
+      await setManualBlock(page, true);
       const left = Math.ceil((end - Date.now()) / 60000);
       if (left !== mins) {
         mins = left;
@@ -22,8 +39,14 @@ async function waitBlockGone(page: Page, h: EngineHooks, maxMs = 180000): Promis
       }
       continue;
     }
-    return true;
+    // 见 BLOCK_CLEAN_POLLS：必须连续多轮都查不到，才算用户真的处理完了
+    clean++;
+    if (clean >= BLOCK_CLEAN_POLLS) {
+      await setManualBlock(page, false);
+      return true;
+    }
   }
+  // 超时不解除静默：此时弹窗很可能还在，一恢复动作二维码就又开始刷新
   h.log('warn', `⚠ 等待超时（${Math.round(maxMs / 60000)} 分钟），本节交还给用户`);
   return false;
 }
@@ -308,6 +331,9 @@ export async function waitForVideo(
   // 刚进页面就弹扫码/验证码时，先等用户处理完再做保活动作
   const pre = await detectManualBlock(page, h.autoPauseOnVerify());
   if (pre) {
+    // 除了主进程这一侧停手，还要让**页面内**的 300ms 保活 ticker 一起静默，
+    // 否则它会绕过这里继续派发鼠标/焦点事件，把二维码刷掉
+    await setManualBlock(page, true);
     h.log('warn', `⚠ 检测到${pre.kind}弹窗：${pre.matched}`);
     h.log('warn', `  ${pre.hint}`);
     const gone = await waitBlockGone(page, h);
@@ -536,6 +562,8 @@ export async function waitForVideoEnd(
   let lastUrl = page.url();
   // 已提示过的弹窗类型，避免每 3 秒刷一次同样的日志
   let announced: string | null = null;
+  // 连续「查不到弹窗」的轮数，攒够 BLOCK_CLEAN_POLLS 才认定人工处理完了
+  let cleanPolls = 0;
   // 进入本函数时的目标 src。目标标记万一丢失（iframe 重挂或平台已做完移除），
   // 重选后若是另一个视频，说明当前任务点已经了结，不必再等。
   const enteredSrc = lastPickedSrc;
@@ -561,19 +589,33 @@ export async function waitForVideoEnd(
     // 因此一旦命中，立刻停掉所有模拟动作，静待用户处理完。
     const block = await detectManualBlock(page, h.autoPauseOnVerify());
     if (block) {
+      cleanPolls = 0;
+      // 每一轮都重申，而不是只在进入弹窗时设一次：平台重挂 iframe 后新文档里
+      // 没有这个标志，ticker 会立刻恢复派发事件——那正是二维码被刷新的时刻
+      await setManualBlock(page, true);
       if (announced !== block.kind) {
         announced = block.kind;
         h.log('warn', `⚠ 检测到${block.kind}弹窗：${block.matched}`);
         h.log('warn', `  ${block.hint}`);
-        h.log('warn', '  已暂停自动操作，处理完成后会自动继续；也可点「停止」结束本节');
+        h.log(
+          'warn',
+          '  已暂停自动操作（含页面内的保活事件）；处理完成后会自动继续，也可点「停止」结束本节'
+        );
       }
       // 不做任何 mouse.move / 事件派发 / 点击
       // 只低频轮询，等弹窗消失
       await ctl.sleep(2000);
       continue;
     }
-    if (announced) {
+    // 见 BLOCK_CLEAN_POLLS：弹层「消失一次」不等于人工处理完了。
+    // 二维码重绘会让弹层短暂消失，单轮就恢复动作会造成
+    // 「暂停→刷新二维码→继续→刷新」的振荡，用户永远扫不上。
+    cleanPolls++;
+    if (announced && cleanPolls >= BLOCK_CLEAN_POLLS) {
       announced = null;
+      cleanPolls = 0;
+      // 人工处理完，把保活 ticker 放回去
+      await setManualBlock(page, false);
       h.log('ok', '  ✓ 弹窗已处理，恢复自动播放');
       await setVideoRate(page, Math.min(2, Math.max(1, h.speed() || 1)));
     }
