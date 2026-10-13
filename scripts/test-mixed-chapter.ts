@@ -29,6 +29,7 @@ const check = (name: string, cond: boolean, detail = '') => {
 const job = read('jobpoint.ts');
 const quiz = read('quiz.ts');
 const index = read('index.ts');
+const video = read('video.ts');
 
 // ---- 1. 任务点识别模块存在且给出三分类 ----
 check(
@@ -174,6 +175,70 @@ check(
   'index 进章节时把任务点数量与类型写进日志',
   /本章共 \$\{active\.total\} 个任务点（已完成 \$\{active\.finished\}）/.test(index),
   '识别结果不可见 = 用户下次还是无从判断'
+);
+
+// ---- 6. 应用级实测（scripts/e2e-real-engine.ts）发现并修掉的问题 ----
+//
+// 上面那些是「零件对」的断言，这一段守的是只有把整条链路跑起来才会暴露的
+// 三个坑。E2E 本身要 ffmpeg + 真浏览器、跑两分钟，不进 npm test；这里用
+// 结构断言把它们钉住，防止以后回退。
+console.log('\n[实测发现：已完成任务点的目标标记残留]');
+check(
+  'markTargetVideo 跳过已完成帧时同时清掉目标标记',
+  /if \(await isFinishedFrame\(frame\)\) \{\s*\n\s*await clearTargetMark\(frame\);/.test(video),
+  '标记残留 → readTargetState 会按 frame 顺序锁死在这个已完成的视频上，整轮反复重播它'
+);
+check(
+  'clearTargetMark 真的移除 data-ch-target 并停住',
+  /async function clearTargetMark\(frame: Frame\)/.test(video) &&
+    /querySelector\('video\[data-ch-target="1"\]'\)/.test(video) &&
+    /v\.removeAttribute\('data-ch-target'\)/.test(video),
+  '只跳过不清标记，下一个任务点永远轮不到'
+);
+
+console.log('\n[实测发现：平台记账滞后被误判成本轮白跑]');
+check(
+  '有 waitUnfinishDrop（等平台计数下降，且有时限）',
+  /export async function waitUnfinishDrop\(/.test(video) &&
+    /Date\.now\(\) < end/.test(video),
+  '缺少等待，短任务点上会立刻读到「计数没变」'
+);
+check(
+  '只在「本轮确实完成了任务点」时才等平台追赶',
+  /const didSomething =\s*\n\s*result === 'completed' \|\| result === 'doc_done' \|\| result === 'quiz_ok';/.test(
+    index
+  ) && /if \(didSomething && lastLeft !== null && left >= lastLeft\) \{/.test(index),
+  '对「什么都没做成」的轮次也给宽限，会让白跑检测失效'
+);
+check(
+  '等不到下降仍然照旧停手（不会无限等）',
+  /if \(lastLeft !== null && left >= lastLeft\) \{\s*\n\s*this\.log\('warn', `    ⚠ 本章待完成数仍为/.test(
+    index
+  ),
+  '宽限变成了无条件继续，MAX_ROUNDS 前会一直空转'
+);
+
+console.log('\n[实测发现：文档任务点被整章计数误判]');
+check(
+  '文档完成按「这一个任务点是否被记账」判，而不是整章清零',
+  /const credited =\s*\n\s*remaining !== null &&\s*\n\s*\(remaining <= 0 \|\| \(before !== null && remaining < before\)\);/.test(
+    index
+  ),
+  '混合章节里文档后面还挂着测验，整章不会清零 → 文档被误报「平台未标记完成」'
+);
+check(
+  '开工前先记下待完成数（before）',
+  /const before = await readUnfinishedCount\(this\.opts\.page\);\s*\n\s*const doc = await handleDocument/.test(
+    index
+  ),
+  '没有基准就无从判断是否下降'
+);
+
+console.log('\n[实测发现：注入页面的函数源码被打包器辅助函数毒化]');
+check(
+  'extractQuestions 注入时兜住 __name（keepNames 产物）',
+  /new Function\('__name', 'return \(' \+ args\.fn \+ '\)\(\)'\)/.test(quiz),
+  '构建开启 keepNames 时这里会 ReferenceError，而调用方 catch 掉 → 静默「解析出 0 题」'
 );
 
 if (failed) {

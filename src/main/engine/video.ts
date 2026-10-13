@@ -104,6 +104,28 @@ async function isFinishedFrame(frame: Frame): Promise<boolean> {
 }
 
 /**
+ * 清掉该 frame 里残留的「当前目标」标记，并把它停住。
+ *
+ * 只对**已完成任务点**的 frame 调用。留着标记的后果见 markTargetVideo 里的
+ * 说明：readTargetState / forcePlay(targetOnly) 按 frame 顺序取第一个带标记
+ * 的视频，会先命中这个已完成的视频，于是引擎整轮都在驱动一个播完的任务点。
+ */
+async function clearTargetMark(frame: Frame): Promise<void> {
+  try {
+    await frame.evaluate(() => {
+      const v = document.querySelector('video[data-ch-target="1"]') as HTMLVideoElement | null;
+      if (!v) return;
+      v.removeAttribute('data-ch-target');
+      try {
+        v.pause();
+      } catch (e) {}
+    });
+  } catch {
+    /* frame 可能正在导航/已销毁，忽略 */
+  }
+}
+
+/**
  * 「当前目标视频」的 DOM 属性名。
  *
  * 必须有唯一定义。旧实现有三套选法，结论不一致：
@@ -139,8 +161,20 @@ export async function markTargetVideo(
 ): Promise<{ src: string } | null> {
   const skip = skipSrcs && skipSrcs.size ? Array.from(skipSrcs) : [];
   for (const frame of page.frames()) {
-    // 平台已标记完成的任务点，其视频不再驱动
-    if (await isFinishedFrame(frame)) continue;
+    // 平台已标记完成的任务点，其视频不再驱动。
+    //
+    // ⚠️ 跳过的同时**必须把可能残留的「当前目标」标记清掉**。
+    // 标记是在下面 evaluate 里维护的，帧被跳过时那段清理逻辑根本不执行，
+    // 旧标记就一直挂在这个已完成的视频上；而 readTargetState / forcePlay
+    // 的 targetOnly 分支是**按 frame 顺序取第一个带标记的视频**——于是引擎
+    // 每一轮都锁死在这个已播完的任务点上，把它从头再播一遍，真正的下一个
+    // 任务点永远轮不到，最后撞上「本章待完成数未下降，停止本章」，
+    // 章内的文档/测验全部被丢下。（实机表现为：一个章节多个任务点，
+    // 只有第一个被反复播，后面的类型根本走不到。）
+    if (await isFinishedFrame(frame)) {
+      await clearTargetMark(frame);
+      continue;
+    }
     try {
       // ⚠️ evaluate 的函数体是被序列化后送到浏览器执行的，两条铁律：
       //   1. 引用不到模块级常量（容差必须作为参数传进来）
@@ -440,6 +474,34 @@ export async function detectDailyLimit(page: Page): Promise<boolean> {
     } catch {}
   }
   return false;
+}
+
+/**
+ * 等平台的「待完成数」降下来。
+ *
+ * 平台的记账是**异步**的：视频看到九成左右才计入完成，而引擎判定「看完」用的是
+ * d−5 秒容差 —— 任务点越短，这个容差就越早于平台的记账点（40s 的视频：引擎
+ * 35s 就认为看完，平台 36s 才记上；8s 的视频差得更远）。
+ * 此时马上去读计数会读到「没变」，而调用方把「没变」当成「本轮白跑」，直接
+ * 停掉整章：剩下的任务点全丢，且本章已被本地记成完成，续跑时连重来的机会
+ * 都没有 —— 用户看到的就是「一个章节只做了第一个任务点」。
+ *
+ * 所以只在「本轮确实完成了一个任务点」时给平台一小段追赶时间；
+ * 超时即返回当时读到的值，绝不无限等（读到 null 也照样返回）。
+ */
+export async function waitUnfinishDrop(
+  page: Page,
+  h: EngineHooks,
+  from: number,
+  timeoutMs = 8000
+): Promise<number | null> {
+  const end = Date.now() + timeoutMs;
+  let last = await readUnfinishedCount(page);
+  while (last !== null && last >= from && Date.now() < end) {
+    await h.ctl.sleep(1000);
+    last = await readUnfinishedCount(page);
+  }
+  return last;
 }
 
 /** 跳到本章下一个未完成的任务点（平台自带的 scroll2Job） */

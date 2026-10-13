@@ -32,6 +32,7 @@ import {
   waitForVideo,
   waitForVideoEnd,
   readUnfinishedCount,
+  waitUnfinishDrop,
   detectDailyLimit,
   gotoUnfinishedJob,
   lastPickedVideoSrc,
@@ -714,6 +715,14 @@ export class ChaoxingEngine {
                   // 文档/文本任务点：滚动+拖拽过一遍，再用平台的未完成计数校验。
                   // 用 readUnfinishedCount 而不是回目录翻条目——同章节多任务点
                   // 在目录里只是一个条目，翻条目的结论不可靠。
+                  //
+                  // ⚠️ 判定标准是「**这一个**任务点有没有被平台记上」，不是
+                  // 「整章是否已清零」。混合章节里文档后面往往还挂着测验，
+                  // 整章清零要等到最后一轮才成立；拿它当判据的话，文档明明
+                  // 过了也会被报成「平台未标记完成」并计一次跳过（完成数少一，
+                  // 用户还会看到一条假告警）。所以先记下开工前的待完成数，
+                  // 只要它下降了，就是这一个任务点被记上了。
+                  const before = await readUnfinishedCount(this.opts.page);
                   const doc = await handleDocument(this.opts.page, this.hooks);
                   if (doc === 'left') {
                     // 用户切走了本章：什么都没做完，不能记账（下面不 markChapterDone）
@@ -724,13 +733,15 @@ export class ChaoxingEngine {
                     this.log('info', '    - 无视频/无文档，跳过');
                   } else {
                     const remaining = await readUnfinishedCount(this.opts.page);
-                    const done = remaining !== null && remaining <= 0;
-                    if (done && markDone()) {
+                    const credited =
+                      remaining !== null &&
+                      (remaining <= 0 || (before !== null && remaining < before));
+                    if (credited && markDone()) {
                       summary.completed++;
                       result = 'doc_done';
                       this.log('ok', '    ✓ 文档任务点完成（平台已确认）');
-                    } else if (done) {
-                      // 用户切走了：这个「0」是新页面的，不是本章做完的
+                    } else if (credited) {
+                      // 用户切走了：这个下降是新页面的，不是本章做完的
                       result = 'user_switched';
                     } else {
                       summary.skipped++;
@@ -795,10 +806,22 @@ export class ChaoxingEngine {
             // 比翻目录条目可靠：同章节多任务点在目录里只是一个条目。
             if (this.ctl.isStopped || dailyLimitHit) break;
 
-            const left = await readUnfinishedCount(this.opts.page);
+            let left = await readUnfinishedCount(this.opts.page);
             if (left === null) {
               // 读不到就别自作聪明地循环，回目录由外层推进
               break;
+            }
+            // 本轮确实完成了一个任务点，但平台的计数还没降下来 —— 它是异步记账的
+            // （见 waitUnfinishDrop 的说明：短任务点上「引擎按容差判完」会早于
+            // 「平台按九成进度记账」）。立刻把「没变」判成本轮白跑会停掉整章，
+            // 剩下的任务点全丢，而本章已被本地记成完成，续跑也不会再碰它。
+            // 先给平台几秒追赶时间；只有在「本轮什么都没完成」时，计数不降才
+            // 真的是白跑（多半是同一个任务点又被播了一遍）。
+            const didSomething =
+              result === 'completed' || result === 'doc_done' || result === 'quiz_ok';
+            if (didSomething && lastLeft !== null && left >= lastLeft) {
+              const dropped = await waitUnfinishDrop(this.opts.page, this.hooks, lastLeft);
+              if (dropped !== null) left = dropped;
             }
             if (left <= 0) {
               if (rounds > 1 || chapter.jobCount > 1) {

@@ -51,6 +51,8 @@ scripts/local-*.ps1
 
 # 推理预算探针的中间产物（生成的题图、用例、输出）
 .probe/
+# 应用级实测的产物（ffmpeg 生成的 WebM 素材、日志、诊断截图）
+.e2e/
 
 # 宣传片中间产物与大文件（不入库）
 promo/asarcheck.jpg

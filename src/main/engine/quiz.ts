@@ -45,6 +45,13 @@ const POPUP_SELECTORS = [
  * ⚠️ 下面的 extractInPage 通过 `fn.toString()` 注入页面执行，页面里没有模块
  * 作用域。所以它用到的一切常量都必须定义在函数体内部 —— 提到模块级会直接
  * ReferenceError。这一点是实际踩过坑的，不要「顺手」把常量提出去。
+ *
+ * ⚠️ 注入的是**函数源码**，因此打包器往函数体里塞的任何辅助调用都会被一起
+ * 送进页面。esbuild 的 keepNames 会生成 `__name(fn, "fn")`，页面里没有这个
+ * 符号 → ReferenceError；而调用方是 `.catch(() => [])`，于是表现为
+ * 「解析出 0 题」——整条答题链路静默失效，日志上看不出原因。
+ * 生产构建没开 keepNames（线上一直正常），但这是构建配置层面的一颗地雷，
+ * 在 extractQuestions 里用形参把它兜住（见那里的 __name 说明）。
  */
 /** 在页面内提取题目结构，并给可点击项打 data-qh 标记 */
 function extractInPage(): { questions: QuizQuestion[] } {
@@ -495,9 +502,16 @@ export async function extractQuestions(
   const { questions } = await frame.evaluate(
     (args: { sel?: string; fn: string }) => {
       const root = args.sel ? (document.querySelector(args.sel) as HTMLElement | null) : null;
+      // 注入的是函数源码，打包器塞进函数体的辅助调用会一起进页面。
+      // esbuild 的 keepNames 会生成 `__name(fn, "fn")`，页面里没这个符号
+      // → ReferenceError。用形参把 `__name` 兜成一个恒等函数：
+      // 注入了就是正常空操作，没注入则完全无副作用。
+      // 少了这一手，构建配置一变，这里就静默变成「解析出 0 题」。
       // eslint-disable-next-line no-new-func
-      const fn = new Function('return (' + args.fn + ')()') as () => { questions: unknown[] };
-      const res = fn();
+      const runner = new Function('__name', 'return (' + args.fn + ')()') as (
+        shim: (fn: unknown, name?: string) => unknown
+      ) => { questions: unknown[] };
+      const res = runner((fn: unknown) => fn);
       return res as { questions: QuizQuestion[] };
     },
     { sel: containerSelector, fn: extractInPage.toString() }

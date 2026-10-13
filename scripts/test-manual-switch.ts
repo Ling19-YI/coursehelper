@@ -178,7 +178,7 @@ check(
 check(
   '三条完成路径都走 markDone()',
   (index.match(/if \(markDone\(\)\) summary\.completed\+\+;/g) || []).length === 2 &&
-    /if \(done && markDone\(\)\) \{/.test(index),
+    /if \(credited && markDone\(\)\) \{/.test(index),
   '答题/视频/文档里有直接记账的'
 );
 check(
