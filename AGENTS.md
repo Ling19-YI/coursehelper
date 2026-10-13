@@ -259,6 +259,15 @@ GitHub 则可 `PATCH /releases/{id}` 原地改。
 
 这也是两平台描述容易不同步的根源（历史上已出过两次），改说明时两边都要确认。
 
+### 7. 上传资产可能碰上 `uploads.github.com` 瞬时 DNS 失败（2026-10-13）
+
+发 v2.1.2 时跑到第二个文件（`latest.yml`）报
+`getaddrinfo ENOTFOUND uploads.github.com`，EXE 已传成功、剩下两个没传上。
+几分钟后同一机器解析正常——是瞬时故障，**不是配置问题**。
+`scripts/local-release.mjs` 会先删旧资产再从头发三件，这时不要重跑整个脚本
+（会白传 110MB），用 `scripts/local-upload-missing.mjs <tag>`：只补缺失的，
+不删已有、不重传。
+
 ### 6. 验GitCode 下载链接别用 HEAD
 
 `curl -I` 返回 **401**，看着像链接失效；真实 GET（`curl -r 0-0`）是 **206** 正常。
