@@ -102,11 +102,15 @@ async function callOnce(
   clearTimeout(timer);
 
   if (!resp.ok) {
+    // 必须带上响应体：只看 HTTP 400 无法区分是模型名错、参数不支持还是格式错误
+    // （用户的接口地址填错时，服务端回的就是「No static resource …」，原文是唯一线索）。
+    // 401 单独点名——它只有一个原因，让用户不用对着状态码猜。
     let detail = '';
     try {
       detail = (await resp.text()).replace(/\s+/g, ' ').slice(0, 300);
     } catch {}
-    throw new Error(`${ch.label} 接口 ${resp.status}${detail ? ' ' + detail : ''}`);
+    const hint = resp.status === 401 ? '（密钥无效或未授权，请检查 API Key）' : '';
+    throw new Error(`${ch.label} 接口 ${resp.status}${hint}${detail ? ' ' + detail : ''}`);
   }
 
   // 先取原文再解析：resp.json() 遇空体只抛 "Unexpected end of JSON input"，

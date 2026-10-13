@@ -381,7 +381,7 @@ GitCode 的 release 建完无法用 API 改，说明必须先写对。
   - **接口地址自动纠正**：`src/shared/baseUrl.ts` 的 `normalizeBaseUrl()` 剥掉整段
     粘贴带来的 `/chat/completions` 结尾、尾斜杠与误粘引号；保存侧（`settings:set`）、
     读取侧（`getVision`）、通道侧（`visionChannel`）三处生效，**老配置不用重新保存**
-  - **接口报错带上服务端原文**（非 401 时取响应体前 140 字），这类 400 才有可诊断线索
+  - **401 直接提示「密钥无效或未授权」**（`searcher.ts` / `visionSearcher.ts`）
   - 设置页补地址填写说明；落地页 FAQ 加「接口地址该怎么填」
   - 新增 `scripts/sync-release-notes.mjs`（发布说明单源同步 + 两平台逐字校验）
   - 新增 `scripts/test-baseurl.ts`（10 用例，已挂进 `npm test`）
@@ -404,6 +404,11 @@ GitCode 的 release 建完无法用 API 改，说明必须先写对。
   为「结构化解析失效的界面」（平台改版、富交互题型、纯 Canvas 渲染、新平台）
   和后续新功能准备。接口与接线方式见 `src/main/engine/agent/README.md`。
   **清理代码时请保留整目录。**
+  ⚠️ 实测（2026-10-13）：**该目录不在主进程 bundle 内**——`app/dist/main/index.js`
+  里只有 `searcher.ts` / `visionSearcher.ts` / `quiz.ts` 等上线路径的文件注释，
+  没有 `agent/*`（唯一引用 `agent/llm.ts` 的 `agent/loop.ts` 自身也没被引入）。
+  **改 agent/ 里的报错文案或逻辑不会影响用户**；要改用户可见行为，去
+  `searcher.ts`（文本答题）与 `visionSearcher.ts`（截图识题）。
 - **多模态 Key 由用户自填**，只要求支持 OpenAI 兼容的 `chat/completions` +
   `image_url`（实测 mimo-v2.5 / mimo-v2.6-flash / qwen3-vl-plus / glm-4.6v /
   glm-5v-turbo 可用）。纯文本模型不吃图，会返回空答案而不是报错
