@@ -22,4 +22,5 @@ export const RESULT_LABEL: Record<string, { text: string; color: string }> = {
   quiz_skip: { text: '答题跳过', color: 'default' },
   error: { text: '出错', color: 'error' },
   skipped: { text: '已跳过', color: 'default' },
+  user_switched: { text: '你切走了本节', color: 'default' },
 };

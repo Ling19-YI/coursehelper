@@ -20,6 +20,9 @@ import {
   clickChapter,
   goBackToCourse,
   diagnoseEmptyChapters,
+  chapterIdOf,
+  readCurrentChapterId,
+  type Chapter,
 } from './chaoxing';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
@@ -68,6 +71,18 @@ export class ChaoxingEngine {
   private tiku: TikuStore;
   private hooks: EngineHooks;
 
+  // ── 用户手动切章节的跟随 ──
+  /** 本章的目录条目 onclick——拿它的 chapterId 和页面上实际打开的比 */
+  private expectedChapterOnclick = '';
+  /** 用户手动切到的章节下标（-1 = 没切过）；长循环只读这个内存标记 */
+  private manualJumpIndex = -1;
+  /** 用户手动打开的那一节已经在屏幕上，别再点目录把他拽回来 */
+  private preopenedOnclick = '';
+  /** 盯章节切换的定时器 */
+  private navTimer: ReturnType<typeof setInterval> | null = null;
+  /** 当前课程的章节列表，供定时器把 chapterId 映射回下标 */
+  private chapterList: Chapter[] = [];
+
   constructor(private opts: EngineOptions) {
     this.store = new ProgressStore(opts.dataDir);
     this.tiku = new TikuStore(path.join(opts.dataDir, 'tiku.json'));
@@ -100,6 +115,7 @@ export class ChaoxingEngine {
       visionChannel: () => this.visionChannel(),
       tiku: () => this.tiku,
       submitCoverRate: () => opts.getSubmitCoverRate(),
+      chapterLeft: () => this.manualJumpIndex >= 0,
     };
   }
 
@@ -124,6 +140,125 @@ export class ChaoxingEngine {
 
   get currentState() {
     return this.state;
+  }
+
+  // ─────────── 用户手动切章节的跟随 ───────────
+
+  /**
+   * 盯住「用户是不是把页面切到了别的章节」。
+   *
+   * 为什么不放在自己的循环里查：刷一门课大部分时间都耗在等视频上（一个视频
+   * 几十分钟），而循环里能插检查点的地方只有每轮开头。用户中途点一下侧栏目录
+   * 就切走了，等这一轮结束才发现的话，期间 probeVideo 会把新章节的视频当成本
+   * 章的继续播，播完还被记到本章头上——完成数虚增，真正做完的那节反而没记。
+   * 所以开一个独立的低频轮询（3s，纯读地址栏），命中一次就置内存标记，
+   * 各条流程（含长循环）只读这个标记，开销可忽略。
+   *
+   * 静默失败在这里特别危险：判错的代价是把用户正看着的章节拽走，所以
+   * 只在「地址栏里的章节 id 和本章对得上/对不上」这一件事上做判断，读不到
+   * 就当没发生。用户若想确认识别是否生效，看日志里那行
+   * 「↩ 页面已切到「…」」即可。
+   */
+  private startChapterWatch(chapters: Chapter[]): void {
+    this.stopChapterWatch();
+    this.chapterList = chapters;
+    this.expectedChapterOnclick = '';
+    this.manualJumpIndex = -1;
+    this.preopenedOnclick = '';
+    this.navTimer = setInterval(() => void this.pollChapterWatch(), 3000);
+    // 别让这个定时器拖住进程退出
+    this.navTimer.unref?.();
+  }
+
+  private stopChapterWatch(): void {
+    if (this.navTimer) {
+      clearInterval(this.navTimer);
+      this.navTimer = null;
+    }
+  }
+
+  /**
+   * 定时探测一次。只读地址栏，`page.url()` 是同步的——不开请求、不与页面
+   * 交互，所以没有「读的过程中引擎自己换了章节」的竞态，也不需要互斥。
+   */
+  private pollChapterWatch(): void {
+    // 已经记下结果了就别重复判（后面的流程只读这个标记）
+    if (this.manualJumpIndex >= 0) return;
+    const expect = this.expectedChapterOnclick;
+    // 不在某一章里（课程主页 / 两章之间导航）→ 没有「切走了」可言
+    if (!expect) return;
+
+    const seen = readCurrentChapterId(this.opts.page);
+    if (!seen) return;
+
+    const here = chapterIdOf(expect);
+    // 连「本章的 id」都取不到（目录条目不是 toOld 格式）→ 没有可比的基准，
+    // 宁可不判。判错的代价是把用户正在看的章节拽走。
+    if (!here) return;
+    if (here === seen) return;
+
+    const idx = this.chapterList.findIndex(c => chapterIdOf(c.onclick) === seen);
+    // 对不上任何一节（换了门课 / 平台用了别的 id 形式）→ 不下结论
+    if (idx < 0) return;
+
+    this.manualJumpIndex = idx;
+    this.log(
+      'info',
+      `\n↩ 页面已切到「${clean(this.chapterList[idx].name)}」——本节让位，从这一节重新开始`,
+    );
+  }
+
+  /** 停表并清掉跟随状态（换课程 / 收尾时调） */
+  private resetChapterWatch(): void {
+    this.stopChapterWatch();
+    this.expectedChapterOnclick = '';
+    this.manualJumpIndex = -1;
+    this.preopenedOnclick = '';
+    this.chapterList = [];
+  }
+
+  /**
+   * 让位给用户手动点开的那一节：回目录 / 保留他那一页，并交出下一轮要处理的下标。
+   * 没发生手动切换时返回 null。
+   *
+   * 「他那一页还开着吗」必须用地址栏核对，不能只信我们自己的标记：从发现
+   * 切走到他这一节被处理，中间可能夹着**我们自己的导航**（上一节收尾的
+   * 「返回课程」、正在点的下一节目录）。那时标记说「已打开」，页面其实已经是
+   * 课程主页或别的章节——照着标记跳过点击，就会在新页面上按旧章节记账。
+   */
+  private async takeManualJump(
+    chapters: Chapter[],
+    resume: boolean,
+    progress: CourseProgress | null,
+  ): Promise<number | null> {
+    if (this.manualJumpIndex < 0) return null;
+    const to = this.manualJumpIndex;
+    this.manualJumpIndex = -1;
+    const target = chapters[to];
+    if (!target) return null;
+
+    const label = clean(target.name);
+    const wantId = chapterIdOf(target.onclick);
+    // 本地已记完成的那一节，下一轮本来就会跳过——那时手上必须先有目录，
+    // 否则「跳过」之后每一节都进不去（见外层 clickChapter）。
+    const willSkip = resume && !!progress?.completedChapters.includes(target.onclick);
+    const stillOpen =
+      !!wantId && !willSkip && readCurrentChapterId(this.opts.page) === wantId;
+
+    if (stillOpen) {
+      this.preopenedOnclick = target.onclick;
+      this.log('info', `    → 就从你打开的「${label}」继续（不再点目录）`);
+    } else {
+      this.preopenedOnclick = '';
+      this.log(
+        'info',
+        willSkip
+          ? `    → 「${label}」本地已记完成，跳过它，从下一节继续`
+          : `    → 回到目录，改从「${label}」开始`,
+      );
+      await goBackToCourse(this.opts.page, this.hooks);
+    }
+    return to;
   }
 
   get isRunning() {
@@ -354,11 +489,27 @@ export class ChaoxingEngine {
         // 否则一旦进入空目录状态，后面每个章节都会「找不到」并全部跳过。
         let reopened = false;
 
+        // 盯着「用户中途手动切章节」，命中就让位（详见 startChapterWatch）
+        this.startChapterWatch(chapters);
+
         for (let i = startIdx; i < chapters.length; i++) {
           this.ctl.throwIfStopped();
           // 当日视频任务点上限是「今天都不能记」，继续遍历剩下的章节纯属空转：
           // 每个章节都会走一遍「检测到上限→跳过」，日志刷屏还白等一晚上。
           if (dailyLimitHit) break;
+
+          // 上一节收尾期间（回目录、翻页）用户可能已经切走了：先让位，再决定点哪一节。
+          // 放在这里而不是只放在内层循环后面，是因为「返回课程」要花几秒，
+          // 那几秒里用户点了别的章节的话，直接去点下一节就把他拽回去了。
+          const jumpedHere = await this.takeManualJump(chapters, !!options.resume, progress);
+          if (jumpedHere !== null) {
+            i = jumpedHere - 1; // 配合 for 的 i++，下一轮正好落在他点的那一节
+            continue;
+          }
+
+          // 换章节前先把跟随目标清空：接下来要么点目录、要么回课程页，
+          // 这期间的地址变化是「我们在导航」，不是「用户切走了」。
+          this.expectedChapterOnclick = '';
           const chapter = chapters[i];
           if (!chapter.onclick || !chapter.onclick.includes('toOld')) continue;
           if (options.resume && progress?.completedChapters.includes(chapter.onclick)) {
@@ -401,7 +552,26 @@ export class ChaoxingEngine {
           // 放进循环的话，每轮都会重新触发 toOld(...,0)——而它的末位参数恒为 0，
           // 等于把页面重置回第一个任务点，第二个视频永远轮不到，还会反复重播
           // 第一个。这正是「一章两个视频不会自动往下」的原因。
-          let entered = await clickChapter(this.opts.page, this.hooks, chapter);
+          //
+          // 例外：这一节正是用户手动切过来的那一节——页面已经打开了，别再点目录。
+          // 再点一次会把他从「正在看的那一节」拉回目录再跳一次，观感上就是
+          // 「我点的它没听，还把我弹回去」。这个「已经打开」要用地址栏核实，
+          // 不能只信标记（takeManualJump 里有同样的理由）。
+          const claimedOpen = this.preopenedOnclick === chapter.onclick;
+          this.preopenedOnclick = '';
+          const enterId = chapterIdOf(chapter.onclick);
+          let alreadyOpen = claimedOpen && !!enterId && readCurrentChapterId(this.opts.page) === enterId;
+          if (claimedOpen && !alreadyOpen) {
+            // 说好保留他那页，页面却已经不在那一节上了——先把目录找回来
+            this.log('warn', '    ⚠ 页面上已经不在那一节了，回目录重新进入');
+            await goBackToCourse(this.opts.page, this.hooks);
+          }
+          let entered = alreadyOpen;
+          if (alreadyOpen) {
+            this.log('info', '    → 已在你手动打开的这一节，直接继续');
+          } else {
+            entered = await clickChapter(this.opts.page, this.hooks, chapter);
+          }
           if (!entered && !reopened) {
             // 目录里找不到多半是页面已失效（实测会出现「返回课程后目录为空」，
             // 之后每个章节都找不到）。重新打开课程页恢复一次，别直接放弃——
@@ -429,6 +599,22 @@ export class ChaoxingEngine {
             emitProgress();
             continue;
           }
+          // 页面已经在本章了——从现在起「地址栏里的章节 id」必须和它一致，
+          // 不一致就是用户手动切走了（或平台自己跳到了别的章节）。
+          this.expectedChapterOnclick = chapter.onclick;
+
+          /**
+           * 记账前的最后一道闸。
+           *
+           * 用户可能在答题 / 看视频 / 看文档的过程中切走，而这几条分支紧接着
+           * 就会把这个「完成」记到本章头上。记错的后果不是数字难看，而是本章
+           * 在续跑时被永久跳过——没做完的题再也不会被答。
+           */
+          const markDone = (): boolean => {
+            if (this.manualJumpIndex >= 0) return false;
+            this.store.markChapterDone(ensureProgress(), chapter.onclick);
+            return true;
+          };
 
           for (;;) {
             if (++rounds > MAX_ROUNDS) {
@@ -436,6 +622,9 @@ export class ChaoxingEngine {
               summary.skipped++;
               break;
             }
+            // 用户手动切走（定时器已记下目标）：本节到此为止。
+            // 不记账、也不 emit——本轮什么都没做完，章节卡片留给重新处理后那一轮。
+            if (this.manualJumpIndex >= 0) break;
             // 平台自报「今日任务点完成数已达上限」时，视频照放但不记完成，
             // 继续刷纯属空转，直接停下并说明，别让用户白等一整晚。
             if (await detectDailyLimit(this.opts.page)) {
@@ -503,8 +692,7 @@ export class ChaoxingEngine {
                   }
                 );
                 if (qr.success) {
-                  this.store.markChapterDone(ensureProgress(), chapter.onclick);
-                  summary.completed++;
+                  if (markDone()) summary.completed++;
                   result = 'quiz_ok';
                   this.log('ok', `    ✓ 答题完成 (${qr.answered} 题)`);
                 } else {
@@ -527,18 +715,23 @@ export class ChaoxingEngine {
                   // 用 readUnfinishedCount 而不是回目录翻条目——同章节多任务点
                   // 在目录里只是一个条目，翻条目的结论不可靠。
                   const doc = await handleDocument(this.opts.page, this.hooks);
-                  if (doc === 'unsupported') {
+                  if (doc === 'left') {
+                    // 用户切走了本章：什么都没做完，不能记账（下面不 markChapterDone）
+                    result = 'user_switched';
+                  } else if (doc === 'unsupported') {
                     summary.skipped++;
                     result = 'no_video';
                     this.log('info', '    - 无视频/无文档，跳过');
                   } else {
                     const remaining = await readUnfinishedCount(this.opts.page);
                     const done = remaining !== null && remaining <= 0;
-                    if (done) {
-                      this.store.markChapterDone(ensureProgress(), chapter.onclick);
+                    if (done && markDone()) {
                       summary.completed++;
                       result = 'doc_done';
                       this.log('ok', '    ✓ 文档任务点完成（平台已确认）');
+                    } else if (done) {
+                      // 用户切走了：这个「0」是新页面的，不是本章做完的
+                      result = 'user_switched';
                     } else {
                       summary.skipped++;
                       result = 'no_video';
@@ -550,11 +743,14 @@ export class ChaoxingEngine {
                   }
                 } else {
                   const r = await waitForVideoEnd(this.opts.page, this.hooks, doneVideos);
-                  if (r === 'completed') {
+                  if (r === 'left') {
+                    // 用户切走了本章。本节没播完——绝不能走到下面的
+                    // markChapterDone，否则新章节的视频会被记成「本章完成」。
+                    result = 'user_switched';
+                  } else if (r === 'completed') {
                     const picked = lastPickedVideoSrc();
                     if (picked) doneVideos.add(picked); // 记下来，下一轮别再选它
-                    this.store.markChapterDone(ensureProgress(), chapter.onclick);
-                    summary.completed++;
+                    if (markDone()) summary.completed++;
                     result = 'completed';
                   } else {
                     summary.skipped++;
@@ -572,6 +768,13 @@ export class ChaoxingEngine {
               result = 'error';
             }
 
+            // 本轮里用户切走了章节 → 本章一律记成「你切走了本节」。
+            // 否则「跳过/未完成」这种属于本章的结论会盖到用户刚打开的新页面上，
+            // 用户看到的就自相矛盾了。
+            if (this.manualJumpIndex >= 0 && result !== 'user_switched') {
+              result = 'user_switched';
+            }
+
             this.emit({
               type: 'chapter',
               index: ++processed,
@@ -581,6 +784,11 @@ export class ChaoxingEngine {
               ts: Date.now(),
             });
             emitProgress();
+
+            // ── 用户切走了本章 ──
+            // 后面那几步（读平台未完成数、scroll2Job）都是作用在**新章节**上的，
+            // 做了也是白做，还会把日志搅浑。直接交给外层重新定位章节。
+            if (result === 'user_switched') break;
 
             // ── 本章还有没有剩下的任务点 ──
             // 以平台自己的隐藏计数为准（input.jobUnfinishCount），
@@ -615,6 +823,14 @@ export class ChaoxingEngine {
             );
             if (!jumped) break;
             await this.hooks.ctl.sleep(1500);
+          }
+
+          // ── 用户中途手动切换了章节 ──
+          // 从他点开的那一节重新开始：把外层游标挪过去，下一轮就处理它。
+          const jumped = await this.takeManualJump(chapters, !!options.resume, progress);
+          if (jumped !== null) {
+            i = jumped - 1; // 配合 for 的 i++，下一轮正好落在 to
+            continue;
           }
 
           // 本章处理完（或放弃）后再回目录。放在这里而不是各分支里，
@@ -652,6 +868,9 @@ export class ChaoxingEngine {
     } finally {
       this.running = false;
       this.currentChapter = '';
+      // 跟随定时器必须停掉：任务结束/被停止后它还在读页面，
+      // 下次跑起来会拿上一轮的章节列表做判断
+      this.resetChapterWatch();
       // 任务结束/被强杀前把攒着的答案刷盘，避免最后一轮白攒
       this.tiku.flush();
     }

@@ -27,7 +27,12 @@ export type ChapterResult =
   | 'error'
   | 'skipped'
   /** 没能进入该任务点（目录里找不到 / frame 丢失），未做任何处理 */
-  | 'enter_failed';
+  | 'enter_failed'
+  /**
+   * 中途被用户手动切走（或平台自己跳到了别的章节）。
+   * 不是失败也不是完成——本节未做完，引擎已让位、改从用户点开的那一节继续。
+   */
+  | 'user_switched';
 
 export type LogLevel = 'info' | 'warn' | 'error' | 'ok';
 

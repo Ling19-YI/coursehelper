@@ -46,6 +46,7 @@ async function main() {
     visionChannel: () => null,
     tiku: () => null,
     submitCoverRate: () => 0.8,
+    chapterLeft: () => false,
   };
 
   await login(page, hooks, creds.username, creds.password);

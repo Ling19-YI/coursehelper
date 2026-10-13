@@ -1,7 +1,7 @@
 import type { Page, Frame } from 'playwright';
 import type { EngineHooks } from './hooks';
 
-export type DocResult = 'scrolled' | 'unsupported';
+export type DocResult = 'scrolled' | 'unsupported' | 'left';
 
 interface Entry {
   idx: number;
@@ -109,6 +109,8 @@ async function dragScroll(page: Page, frame: Frame, rounds: number): Promise<boo
 export async function handleDocument(page: Page, h: EngineHooks): Promise<DocResult> {
   // 懒加载图片撑开容器需要时间，否则探测不到溢出
   await h.ctl.sleep(1500);
+  // 用户可能在上面这段等待里手动切走了本节
+  if (h.chapterLeft()) return 'left';
 
   const plan: Plan[] = [];
   const mediaFrames: Frame[] = [];
@@ -136,6 +138,8 @@ export async function handleDocument(page: Page, h: EngineHooks): Promise<DocRes
     h.log('info', `   📄 检测到可滚动文档，渐进滚动（${steps} 步）…`);
     for (let s = 1; s <= steps; s++) {
       h.ctl.throwIfStopped();
+      // 手动切章节后别再对着新章节的容器滚——那不是本章的文档
+      if (h.chapterLeft()) return 'left';
       const t = s / steps;
       for (const p of plan) {
         try {

@@ -450,6 +450,40 @@ function findChapterFrame(page: Page): Frame | null {
 }
 
 /**
+ * 从目录条目的 onclick 取章节 id。
+ *
+ * 平台格式恒为 `toOld(courseId, chapterId, clazzId, 0)`，第二个参数就是
+ * 打开该章节后 studentstudy 地址里的 chapterId。
+ *
+ * ⚠️ 只取第二个参数，**不做「onclick 里包含 id」这种宽松匹配**：
+ * 第一个参数 courseId 在同门课的所有章节里完全一样，宽松匹配会让每一节都
+ * 命中、把「用户切到了第 7 节」判成「切到了第 1 节」。宁可判不出（功能不生效），
+ * 也不能判错（把用户拽到别的章节）。
+ */
+export function chapterIdOf(onclick: string): string | null {
+  const m = /toOld\s*\(\s*[^,]+,\s*([^,]+?)\s*,/.exec(onclick || '');
+  return m ? m[1].replace(/^['"]|['"]$/g, '').trim() : null;
+}
+
+/**
+ * 读页面上**实际打开**的章节 id。
+ *
+ * 只认顶层地址里的 chapterId——它是平台自己跳转时写进去的，不是我们猜的。
+ *
+ * 两个刻意的取舍：
+ *  1. 不看 iframe 的地址。返回课程/刷新目录时旧内容 iframe 还会残留一小会儿，
+ *     从它身上读到的 chapterId 是**上一节**的，正好会被判成「用户切走了」→
+ *     来回弹跳。顶层地址切章节时才会变，没有这个残留问题。
+ *  2. 读不到（不在章节页：课程主页、刷新目录、风控页）就返回 null，
+ *     调用方按「没发生」处理。目录里的高亮态类名各版本不一致，不拿它兜底——
+ *     猜错一次的代价是把用户正在看的章节拽走。
+ */
+export function readCurrentChapterId(page: Page): string | null {
+  const m = /[?&]chapterId=([^&#]+)/.exec(page.url());
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
  * 读取章节目录。
  *
  * 一个 chapter_item 对应一个「章节」，里面可能含多个任务点。DOM 里：

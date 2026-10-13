@@ -56,6 +56,7 @@ function makeHooks(): EngineHooks {
     visionChannel: () => null,
     tiku: () => null,
     submitCoverRate: () => 0.8,
+    chapterLeft: () => false,
   };
 }
 

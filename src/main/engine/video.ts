@@ -28,7 +28,7 @@ async function waitBlockGone(page: Page, h: EngineHooks, maxMs = 180000): Promis
   return false;
 }
 
-export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected';
+export type VideoResult = 'completed' | 'no_video' | 'stuck' | 'unexpected' | 'left';
 
 /**
  * 判定「这个任务点已经看完了」的容差（秒）。
@@ -484,6 +484,13 @@ export async function waitForVideoEnd(
   while (true) {
     ctl.throwIfStopped();
     iteration++;
+
+    // ---- 用户手动切章节优先判断 ----
+    // 用户点侧栏目录换了一节，本节的视频已经不在页面上了。此时**必须立刻
+    // 让位**：继续等下去的话，probeVideo 会重选到新章节的视频接着播，播完
+    // 还会被上层记到本章头上——完成数虚增，真正做完的那一节反而没记。
+    // 纯内存读，不开销。
+    if (h.chapterLeft()) return 'left';
 
     // ---- 人工介入优先判断 ----
     // 某些课程播放中会弹手机扫码 / 验证码 / 人脸识别。

@@ -89,6 +89,7 @@ async function main() {
     visionChannel: () => null,
     tiku: () => null,
     submitCoverRate: () => 0.8,
+    chapterLeft: () => false,
   };
 
   /** 打印当前 frames 与被选中的目录 frame——直接验证根因 */
