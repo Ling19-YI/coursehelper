@@ -228,12 +228,20 @@ export class ChaoxingEngine {
       // 「未配置多模态通道」（调用参数漏传，没有编译错误）；答题通道到底
       // 回退到了谁，也没人确认过。开跑先亮一次，省得对着一段看不出所以然
       // 的日志猜——上两次排查都卡在这里。
+      //
+      // 「未配置」必须说清缺哪一半：密钥和地址是两个独立输入框，只填一个
+      // 是最高发的误配（设置页以前还只看 key 就显示「已配置」）。
       const vch = this.visionChannel();
       const ach = this.answerChannel();
+      const v = this.opts.getVision();
+      const missing: string[] = [];
+      if (!v.apiKey) missing.push('API Key');
+      if (!v.baseUrl) missing.push('接口地址');
+      const why = missing.length ? `未配置（缺 ${missing.join(' 和 ')}）` : '未配置';
       this.log(
         'info',
-        `AI 通道自检：答题=${ach ? `${ach.label}/${ach.model}` : '未配置'}` +
-          ` | 多模态=${vch ? `就绪/${vch.model}` : '未配置（图片题会留空）'}`
+        `AI 通道自检：答题=${ach ? `${ach.label}/${ach.model}` : why}` +
+          ` | 多模态=${vch ? `就绪/${vch.model}` : `${why}（图片题会留空）`}`
       );
 
       for (const course of courses) {

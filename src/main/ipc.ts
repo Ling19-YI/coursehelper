@@ -159,11 +159,16 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
 
   ipcMain.handle('vision:get', () => {
     const key = store.loadVisionKey();
-    return {
-      // 只回传末4 位用于界面确认，不泄露完整 key
-      configured: !!key,
-      hint: key ? `\u2022\u2022\u2022\u2022${key.slice(-4)}` : '',
-    };
+    const baseUrl = store.settings.visionBaseUrl || '';
+    // 判定必须和引擎侧一致：answerChannel()/visionChannel() 都要求
+    // apiKey && baseUrl 同时存在。以前这里只看 key，用户只填密钥时
+    // 设置页显示「已配置」、AI 开关能开，引擎却算出空通道，
+    // 答题时只剩「未配置 AI 接口」——两边对「配没配」的定义不一样。
+    const configured = !!key && !!baseUrl;
+    let hint = '';
+    if (key) hint = `\u2022\u2022\u2022\u2022${key.slice(-4)}`;
+    if (key && !baseUrl) hint += '（还缺接口地址，答题不会调用 AI）';
+    return { configured, hint };
   });
 
   ipcMain.handle('vision:set', (_ev, key: string) => {

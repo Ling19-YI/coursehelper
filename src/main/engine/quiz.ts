@@ -849,7 +849,7 @@ export async function handleQuiz(
         ? { baseUrl: 'https://api.deepseek.com/v1', apiKey, model: 'deepseek-chat', label: 'DeepSeek' }
         : null;
     if (!channel?.apiKey) {
-      h.log('warn', '    \u26a0 \u672a\u914d\u7f6e AI \u63a5\u53e3');
+      h.log('warn', '    \u26a0 \u672a\u914d\u7f6e AI \u63a5\u53e3\uff08\u8bbe\u7f6e \u2192 \u591a\u6a21\u6001 API Key\uff0c\u5730\u5740\u548c\u5bc6\u94a5\u90fd\u8981\u586b\uff09');
     } else {
       chain.push(new LlmSearcher(channel));
     }
@@ -857,8 +857,17 @@ export async function handleQuiz(
     if (!chain.length) {
       h.log('warn', '    \u26a0 \u6ca1\u6709\u53ef\u7528\u641c\u9898\u5668\uff0c\u5168\u90e8\u7559\u7a7a');
     } else {
-      const got = await resolveAnswers(plain, chain, q =>
-        h.log('info', `      Q${q.index} \u65e0\u89e3\uff0c\u7559\u7a7a`)
+      const got = await resolveAnswers(
+        plain,
+        chain,
+        q => h.log('info', `      Q${q.index} \u65e0\u89e3\uff0c\u7559\u7a7a`),
+        // AI/题库接口整体失败必须亮出来：以前只进主进程 console.warn，
+        // 用户看到的就是「无解」俩字，不知道该换 key、换模型名还是换地址。
+        (name, e) =>
+          h.log(
+            'warn',
+            `    \u26a0 ${name}\u7b54\u9898\u5931\u8d25\uff08\u5df2\u91cd\u8bd5\uff09\uff1a${String(e?.message || e).slice(0, 140)}`
+          )
       );
       for (const [k, v] of got) answers.set(k, v);
     }

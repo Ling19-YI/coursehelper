@@ -63,6 +63,15 @@ export default function Settings() {
         setSaving(false);
         return;
       }
+      // 有密钥但没地址 = 引擎侧一定算出空通道（answerChannel 要求两者都有）。
+      // 以前 vision:get 只看 key 就报「已配置」，用户存着 key 空着地址，
+      // 答题时日志只剩「未配置 AI 接口」，没人提示该去填地址。
+      const hasKey = !!visionKey.trim() || visionInfo.configured;
+      if (hasKey && !visionBaseUrl.trim()) {
+        message.warning('已填写 API Key 但接口地址为空，AI 答题不会被调用');
+        setSaving(false);
+        return;
+      }
       if (username.trim() && password) {
         await a.saveCredentials(username.trim(), password);
         setPassword('');
@@ -162,7 +171,7 @@ export default function Settings() {
       <div className="cardish">
         <b>多模态 API Key</b>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          用于看图答题。仅保存在本机（系统加密），不会上传或写入配置文件。
+          答题与看图解题都用它（OpenAI 兼容接口）。仅保存在本机（系统加密），不会上传或写入配置文件。
         </div>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input.Password
@@ -177,6 +186,11 @@ export default function Settings() {
             onChange={e => setVisionBaseUrl(e.target.value)}
             autoComplete="off"
           />
+          {(visionInfo.configured || visionKey.trim()) && !visionBaseUrl.trim() && (
+            <div style={{ color: '#faad14', fontSize: 12 }}>
+              ⚠ 接口地址为空：密钥已保存但 AI 答题不会被调用（文本答题和看图答题都用这个地址）
+            </div>
+          )}
           <Input
             placeholder="模型名（需支持图片输入）"
             value={visionModel}
