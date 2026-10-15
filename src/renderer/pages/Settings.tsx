@@ -78,7 +78,7 @@ export default function Settings() {
         setPassword('');
         message.success('账号已保存（密码已加密存储）');
       } else if (!username.trim()) {
-        message.warning('请填写超星账号');
+        message.warning('请填写平台账号');
         setSaving(false);
         return;
       }
@@ -113,9 +113,9 @@ export default function Settings() {
   return (
     <div>
       <div className="cardish">
-        <b>超星账号</b>
+        <b>平台账号</b>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          仅保存在本机（系统加密），用于自动登录学习通。
+          仅保存在本机（系统加密），用于自动登录课程平台。
         </div>
         <Space direction="vertical" style={{ width: '100%' }}>
           <Input
@@ -222,7 +222,7 @@ export default function Settings() {
         </div>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
           默认<strong>关闭</strong>。这类弹窗的识别很容易误判——课程正文里本来就会出现「人脸识别」
-          「验证码」这些词，一旦误判整轮刷课就停在那里等人，而日志里看不出所以然。
+          「验证码」这些词，一旦误判整轮任务就停在那里等人，而日志里看不出所以然。
           关闭后引擎照常跑，真遇到验证码会因视频停滞被判为卡住并跳过，不会无限等。
         </div>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
@@ -307,7 +307,7 @@ export default function Settings() {
       <div className="cardish">
         <b>视频静音</b>
         <div className="muted" style={{ margin: '6px 0 10px' }}>
-          默认静音。刷课时无需出声，也避免多开任务时声音叠加。
+          默认静音。自动播放时无需出声，也避免多开任务时声音叠加。
           关闭后视频会正常播放声音。
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

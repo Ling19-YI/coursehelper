@@ -66,7 +66,7 @@ export function registerIpc(store: Store, session: Session, getWindow: () => Bro
 
   const requireCreds = () => {
     const c = store.loadCredentials();
-    if (!c?.username) throw new Error('请先在「设置」中填写超星账号');
+    if (!c?.username) throw new Error('请先在「设置」中填写平台账号');
     return c;
   };
 

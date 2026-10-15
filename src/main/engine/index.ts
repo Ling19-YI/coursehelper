@@ -27,7 +27,12 @@ import {
 import { detectManualBlock } from './blocker';
 import { handleDocument } from './document';
 import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
-import { activeJob, jobKindLabel } from './jobpoint';
+import {
+  activeJob,
+  jobKindLabel,
+  hasUnfinishedVideoJob,
+  describeJobInventory,
+} from './jobpoint';
 import { TikuStore } from './tiku';
 import {
   waitForVideo,
@@ -695,9 +700,44 @@ export class ChaoxingEngine {
                   );
                 }
               }
-              const isQuiz =
-                active.kind === 'quiz' ||
-                (active.kind === 'unknown' && (await isQuizPage(this.opts.page)));
+
+              // 本章的任务点清单。判成测验但页面里还挂着没播完的视频时，
+              // 把每个任务点的「类型 / 完成标记 / 是否在可视区」全打出来——
+              // 这是用户反馈「没放完视频就去答题」最关键的一行证据：
+              // 有了它就能区分两种成因（① 判错了类型 ② 选错了任务点），
+              // 不必再靠猜去改排序逻辑。
+              if (active.kind === 'quiz') {
+                const inventory = await describeJobInventory(this.opts.page);
+                const pendingVideo = inventory.find(x => x.kind === 'video' && !x.finished);
+                if (pendingVideo) {
+                  this.log(
+                    'warn',
+                    `    ⚠ 本章还有未完成的视频任务点（${pendingVideo.inView ? '在可视区内' : '不在可视区'}），本轮却判成了测验`
+                  );
+                  this.log(
+                    'warn',
+                    `      任务点清单: ${inventory
+                      .map(x => `${jobKindLabel(x.kind)}${x.finished ? '✓' : '○'}${x.inView ? '👁' : ''}`)
+                      .join(' / ')}`
+                  );
+                }
+              }
+              // unknown 时才退回isQuizPage —— 但那道老路问的是
+              // 「DOM 里有没有测验 iframe」，混合章节里测验 iframe 一直在，
+              // 于是视频还没播就会被判成测验章（用户反馈：
+              // 「一个章节同时出现视频和题目，没放完视频就去答题」）。
+              // 所以退回前先确认本章没有待播的视频任务点。
+              let isQuiz = active.kind === 'quiz';
+              if (!isQuiz && active.kind === 'unknown') {
+                if (await hasUnfinishedVideoJob(this.opts.page)) {
+                  this.log(
+                    'info',
+                    '    · 本章还有未完成的视频任务点，不按测验处理（视频优先）'
+                  );
+                } else {
+                  isQuiz = await isQuizPage(this.opts.page);
+                }
+              }
               // 设置页的「AI 自动答题」是总开关：关掉就所有题目都不答。
               // 它曾经只被声明、从未被读取——用户关掉后测验照样自动答题，
               // 与设置页「关闭后遇到题目会跳过并记入日志」的说明正好相反。

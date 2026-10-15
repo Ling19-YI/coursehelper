@@ -8,7 +8,7 @@ const PLACEHOLDER_HTML =
   'html,body{margin:0;height:100%;background:#0f172a;color:#64748b;font:14px/1.6 "Microsoft YaHei",sans-serif;}' +
   '.wrap{height:100%;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;}' +
   'b{color:#94a3b8;font-size:16px;display:block;margin-bottom:8px;}</style></head>' +
-  '<body><div class="wrap"><div><b>课程页面区域</b>点击「获取课程」或开始任务后<br>超星学习通页面将在此处打开</div></div></body></html>';
+  '<body><div class="wrap"><div><b>课程页面区域</b>点击「获取课程」或开始任务后<br>课程平台页面将在此处打开</div></div></body></html>';
 const PLACEHOLDER_URL = 'data:text/html;charset=utf-8,' + encodeURIComponent(PLACEHOLDER_HTML);
 
 const LAUNCH_ARGS = [

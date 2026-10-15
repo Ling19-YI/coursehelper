@@ -2,6 +2,7 @@ import { Alert, Button, Descriptions, Progress, Space, Tag, Typography } from 'a
 import { useEffect, useState } from 'react';
 import { CloudDownloadOutlined } from '@ant-design/icons';
 import { useApp } from '../state';
+import { BRAND } from '../brand';
 import type { UpdateState } from '../../shared/api';
 import donateQr from '../donate.png';
 
@@ -97,17 +98,17 @@ export default function About() {
         </Space>
       </div>
       <div className="cardish">
-        <b>刷课助手 CourseHelper</b>
+        <b>{BRAND.name}</b>
         <Descriptions column={1} size="small" style={{ marginTop: 10 }}>
           <Descriptions.Item label="版本">v{a.info?.version ?? '—'}</Descriptions.Item>
           <Descriptions.Item label="价格">
-            <Tag color="green">完全免费 · 无需激活码</Tag>
+            <Tag color="green">{BRAND.price}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="内嵌浏览器">
             Electron WebContentsView + CDP（无需另装浏览器）
           </Descriptions.Item>
           <Descriptions.Item label="支持平台">
-            <Tag color="blue">超星学习通</Tag>
+            <Tag color="blue">{BRAND.platform}</Tag>
             <Tag>更多平台规划中</Tag>
           </Descriptions.Item>
         </Descriptions>

@@ -1,8 +1,8 @@
 {
   "name": "coursehelper",
-  "productName": "刷课助手 CourseHelper",
-  "version": "2.1.2",
-  "description": "超星学习通自动刷课助手",
+  "productName": "课程任务助手 CourseHelper",
+  "version": "2.1.3",
+  "description": "高校在线课程任务自动化工具",
   "main": "app/dist/main/index.js",
   "license": "UNLICENSED",
   "private": true,
@@ -15,8 +15,11 @@
     "spike": "node scripts/spike.mjs",
     "test:answer": "tsx scripts/test-answer-chain.ts",
     "test:vision": "tsx scripts/test-vision-answer.ts",
-    "test": "npm run typecheck && npm run test:baseurl && npm run test:answer && npm run test:vision && npm run test:popup && npm run test:ai-silent && npm run test:channel && npm run test:mixed && npm run test:switch && npm run test:budget",
+    "test": "npm run typecheck && npm run check:compliance && npm run test:baseurl && npm run test:migration && npm run test:answer && npm run test:vision && npm run test:popup && npm run test:ai-silent && npm run test:channel && npm run test:mixed && npm run test:switch && npm run test:budget",
+    "check:compliance": "node scripts/check-compliance.mjs",
+    "make:icon": "node scripts/make-icon.mjs",
     "test:baseurl": "tsx scripts/test-baseurl.ts",
+    "test:migration": "tsx scripts/test-migration.ts",
     "test:popup": "tsx scripts/test-video-popup.ts",
     "test:ai-silent": "tsx scripts/test-ai-silent-failure.ts",
     "test:budget": "tsx scripts/test-reasoning-budget.ts",
@@ -26,7 +29,12 @@
     "test:switch-dom": "tsx scripts/test-manual-switch-dom.ts",
     "test:block-dom": "tsx scripts/test-manual-block-ticker.ts",
     "test:e2e": "tsx scripts/e2e-real-engine.ts",
-    "test:channel": "node scripts/test-channel.mjs"
+    "test:channel": "node scripts/test-channel.mjs",
+    "bili:check": "node scripts/check-bili-compliance.mjs",
+    "bili:shots": "node scripts/capture-bili-shots.mjs",
+    "bili:preview": "node scripts/preview-bili-promo.mjs",
+    "bili:build": "node scripts/build-bili-promo.mjs",
+    "bili:voice": "node scripts/build-bili-voice.mjs"
   },
   "devDependencies": {
     "@ant-design/icons": "^6.3.4",

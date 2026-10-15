@@ -257,6 +257,62 @@ export async function activeJobKind(page: Page): Promise<JobKind> {
   return (await activeJob(page)).kind;
 }
 
+/**
+ * 本页是否还挂着**没做完的视频任务点**。
+ *
+ * ── 为什么需要 ──
+ * 用户反馈「一个章节同时出现视频和题目，没放完视频就去答题」。
+ *
+ * 根因在index.ts 的这一行：
+ *     const isQuiz = active.kind === 'quiz'
+ *       || (active.kind === 'unknown' && await isQuizPage(page));
+ *
+ * `active.kind` 为unknown 时（iframe 还没导航完/ 判不出模块类型）会退回
+ * `isQuizPage`，而那条老路的第3 步是 `findQuizFrames` —— 也就是
+ * 「DOM 里有没有测验 iframe」。混合章节里测验 iframe 本来就一直在，
+ * 于是哪怕视频还没播，这一瞬间也会被判成「本章是测验章」，
+ * 直接走答题分支，视频从头到尾没被碰过。
+ *
+ * 也就是说：jobpoint.ts 把判定改成「当前活跃任务点」之后，
+ * index.ts 的回退路径又把「DOM 里有没有」这个原始错误请了回来。
+ *
+ * 这里给回退加一道闸：**只要本章还有没播完的视频，就不许判成测验。**
+ * 宁可这一轮什么都不做（下一轮 activeJob 会重新判定），也不能跳过分
+ * 视频直接去答题 —— 后者会让用户看到「视频一秒钟没播就去答题」。
+ */
+export async function hasUnfinishedVideoJob(page: Page): Promise<boolean> {
+  try {
+    const jobs = await collectJobFrames(page);
+    return jobs.some(j => j.kind === 'video' && !j.finished);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 本章任务点清单，用于诊断日志。
+ *
+ * 为什么单独导出：混合章节（视频 + 测验同页）的故障有两种截然不同的成因——
+ *   ① 任务点**类型判错**（视频被当成测验）
+ *   ② 类型判对了，但**选错了任务点**（pickActiveJob 挑中了可视区里的测验，
+ *      而没播完的视频排在前面）
+ * 两者日志表现完全不同，光看「本轮判成测验」无法区分。把这三项
+ * （类型 / 完成标记 / 可视区）一次性打出来，看一眼就能定位。
+ */
+export async function describeJobInventory(page: Page): Promise<
+  Array<{ kind: JobKind; finished: boolean; inView: boolean }>
+> {
+  try {
+    return (await collectJobFrames(page)).map(j => ({
+      kind: j.kind,
+      finished: j.finished,
+      inView: j.inView,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 /** 把类型翻成给用户看的短标签 */
 export function jobKindLabel(kind: JobKind): string {
   switch (kind) {

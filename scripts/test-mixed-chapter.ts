@@ -148,7 +148,7 @@ check(
 check(
   'index 用 activeJob 取代裸 isQuizPage',
   /const active = await activeJob\(this\.opts\.page, wantJobs\)/.test(index) &&
-    /const isQuiz =\s*\n\s*active\.kind === 'quiz'/.test(index),
+    /let isQuiz = active\.kind === 'quiz';/.test(index),
   '分派未落在任务点上'
 );
 check(
@@ -163,7 +163,7 @@ check(
 );
 check(
   'index 未知类型才退回 isQuizPage',
-  /active\.kind === 'unknown' && \(await isQuizPage\(this\.opts\.page\)\)/.test(index),
+  /active\.kind === 'unknown'/.test(index) && /isQuiz = await isQuizPage\(this\.opts\.page\);/.test(index),
   'unknown 时没有兜底，新课程页会整体漏做'
 );
 check(
@@ -314,6 +314,57 @@ check(
   '被风控后不再换课重试（整个会话都被盯上了）',
   /if \(riskBlocked\) break;/.test(index),
   '换课也一样进不去，纯空转'
+);
+
+console.log('\n[用户反馈：同章节有视频和题目时，没放完视频就去答题]');
+//
+// 旧结构把判定从「DOM 里有没有测验 iframe」搬到了「当前活跃任务点」，
+// 但 index.ts 的回退路径又请回了老逻辑：active.kind === 'unknown' 时调
+// isQuizPage，而它内部第3 步 findQuizFrames 问的还是「页面上有没有测验」。
+// 混合章节里测验 iframe 一直在，于是视频还没播就被判成测验章 → 直接答题。
+// 这几条守住「有未播完的视频就不许判成测验」这道闸。
+check(
+  'jobpoint 导出 hasUnfinishedVideoJob',
+  /export async function hasUnfinishedVideoJob\(/.test(job),
+  '缺这个守卫，unknown 时无从判断视频是否该优先'
+);
+check(
+  'hasUnfinishedVideoJob 只看未完成的视频任务点',
+  /j\.kind === 'video' && !j\.finished/.test(job),
+  '把已完成的视频也算进去会永久挡住测验分支'
+);
+check(
+  'index 回退到 isQuizPage 之前先问「有没有待播视频」',
+  /if \(await hasUnfinishedVideoJob\(this\.opts\.page\)\) \{[\s\S]{0,300}?\} else \{\s*\n\s*isQuiz = await isQuizPage/.test(
+    index
+  ),
+  '没有这道闸，混合章节在 unknown 时仍会被测验 iframe 劫持'
+);
+check(
+  'index 在日志里说明「视频优先」',
+  /本章还有未完成的视频任务点，不按测验处理/.test(index),
+  '静默跳过会让用户以为程序卡住了'
+);
+check(
+  'isQuizPage 内部也守同一道闸（防止其它调用方绕过）',
+  /if \(await hasUnfinishedVideoJob\(page\)\) return false;/.test(quiz),
+  '只在 index 加闸，其它调用 isQuizPage 的地方仍会误判'
+);
+check(
+  'isQuizPage 的闸在 findQuizPopup / findQuizFrames 之前',
+  (() => {
+    const body = quiz.slice(quiz.indexOf('export async function isQuizPage'));
+    const gate = body.indexOf('hasUnfinishedVideoJob');
+    const popup = body.indexOf('findQuizPopup');
+    const frames = body.indexOf('findQuizFrames');
+    return gate > -1 && gate < popup && gate < frames;
+  })(),
+  '闸放在判定之后就等于没放'
+);
+check(
+  'quiz.ts 导入 hasUnfinishedVideoJob',
+  /import \{[^}]*hasUnfinishedVideoJob[^}]*\} from '\.\/jobpoint'/.test(quiz),
+  '调用了但没导入，构建期就断'
 );
 
 if (failed) {

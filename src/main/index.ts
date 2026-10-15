@@ -1,11 +1,19 @@
 import { app, BrowserWindow, screen } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import { Store } from './store';
 import { Session } from './session';
 import { registerIpc } from './ipc';
 import { initUpdater, checkForUpdates } from './updater';
+import { APP_DIR_NAME, migrateUserDataDir } from '../shared/paths';
 
-app.setName('刷课助手 CourseHelper');
+app.setName(APP_DIR_NAME);
+
+// ⚠️ setName 必须在任何 getPath('userData') 调用之前执行，否则路径按旧名算。
+// 但 Electron 在启动早期就用 productName 决定过 userData 路径，所以改名的
+// 那一版会指向一个全新的空目录 —— 老用户的账号与学习进度看起来「全没了」。
+// 这里把旧目录整个搬过来。必须在 ready 之前做完，否则可能晚于 Store 的构造。
+migrateUserDataDir();
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -72,7 +80,7 @@ function layout() {
 async function createWindow() {
   store = new Store();
 
-  // 恢复上次的窗口大小/位置。用户嫌窗口太大挡着点刷课，改小一次就该记住，
+  // 恢复上次的窗口大小/位置。用户嫌窗口太大挡着操作，改小一次就该记住，
   // 否则每次重启又弹回 1440x900，等于没改。
   const saved = store.settings.windowBounds;
   const bounds =

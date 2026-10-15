@@ -8,6 +8,7 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import { AppProvider, useApp } from './state';
+import { BRAND } from './brand';
 import Dashboard from './pages/Dashboard';
 import Courses from './pages/Courses';
 import Monitor from './pages/Monitor';
@@ -54,14 +55,17 @@ const PAGES: Record<string, React.ReactNode> = {
 
 function Shell() {
   const { page, setPage, engineState } = useApp();
+  useEffect(() => {
+    document.title = BRAND.name;
+  }, []);
 
   const meta = stateMeta(engineState);
   return (
     <div className="panel">
       <div className="panel-header">
         <div className="brand">
-          <span className="brand-mark">刷</span>
-          刷课助手 CourseHelper
+          <span className="brand-mark">{BRAND.mark}</span>
+          {BRAND.name}
         </div>
         <div className="row">
           <Tag color="green">免费版</Tag>

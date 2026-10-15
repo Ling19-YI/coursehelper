@@ -7,6 +7,7 @@ import {
 } from '@ant-design/icons';
 import { useApp } from '../state';
 import { stateMeta } from '../App';
+import { BRAND } from '../brand';
 import { fmtDur, RESULT_LABEL } from '../util';
 
 const BUSY = ['starting', 'login', 'listing', 'running', 'paused'];
@@ -40,7 +41,7 @@ export default function Dashboard() {
           type="warning"
           showIcon
           style={{ marginBottom: 12 }}
-          message="尚未配置超星账号"
+          message="尚未配置平台账号"
           action={
             <Button size="small" onClick={() => a.setPage('settings')}>
               去设置
@@ -61,7 +62,7 @@ export default function Dashboard() {
           <Space>
             {!busy && (
               <Button type="primary" icon={<RocketOutlined />} onClick={onStart}>
-                开始刷课
+                {BRAND.start}
               </Button>
             )}
             {running && (

@@ -1,5 +1,7 @@
 appId: com.coursehelper.desktop
-productName: 刷课助手 CourseHelper
+# 与 package.json 的 productName / src/shared/paths.ts 的 APP_DIR_NAME 必须一致，
+# 三处任一不同步，安装包文件名、快捷方式、userData 目录就会各叫各的。
+productName: 课程任务助手 CourseHelper
 directories:
   output: release
 # 必须用精确白名单：早前用 app/dist/**/* 会把本地探针产物

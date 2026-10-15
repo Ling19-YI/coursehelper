@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1920px; height:1080px; overflow:hidden; background:#060a13;
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif; color:#e8edf7; }
+  #stage { position:absolute; inset:0; }
+  .scene { position:absolute; inset:0; will-change:transform,opacity; }
+
+  .glass { background:rgba(13,20,36,.66); border:1px solid rgba(148,163,184,.20);
+    border-radius:22px; backdrop-filter:blur(12px); }
+  .chip { display:inline-flex; align-items:center; gap:10px; padding:12px 22px; border-radius:999px;
+    font-size:26px; font-weight:600; background:rgba(15,23,42,.80);
+    border:1px solid rgba(59,130,246,.45); box-shadow:0 10px 40px rgba(0,0,0,.45); }
+  .chip .dot { width:12px; height:12px; border-radius:50%; background:#34d399; box-shadow:0 0 14px #34d399; }
+  .shot { border-radius:18px; overflow:hidden;
+    box-shadow:0 40px 120px rgba(0,0,0,.65), 0 0 0 1px rgba(148,163,184,.26); }
+  .shot img { display:block; width:100%; height:100%; object-fit:cover; }
+  .gradtext { background:linear-gradient(92deg,#7dd3fc,#a78bfa 60%,#f0abfc);
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .num { font-variant-numeric:tabular-nums; }
+
+  #subtitle { position:absolute; left:0; right:0; bottom:60px; text-align:center;
+    font-size:46px; font-weight:700; letter-spacing:1px; opacity:0; z-index:50;
+    text-shadow:0 4px 18px rgba(0,0,0,.92), 0 0 42px rgba(0,0,0,.65); }
+  #subtitle .bar { display:block; width:120px; height:5px; margin:0 auto 20px; border-radius:4px;
+    background:linear-gradient(90deg,#60a5fa,#a78bfa); }
+  .prog { position:absolute; left:0; bottom:0; height:6px; z-index:60;
+    background:linear-gradient(90deg,#3b82f6,#a855f7); box-shadow:0 0 18px rgba(96,165,250,.7); }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="subtitle"><span class="bar"></span><span id="subtext"></span></div>
+  <div class="prog" id="prog"></div>
+<script>
+/* ============================================================
+ * CourseHelper · B站正片渲染器（75s · 1920×1080 · 30fps）
+ * 约束：window.seek(t) 必须是**纯函数**——所有动画只依赖 t，
+ *       由构建程序逐帧调用 + 截图合成，不允许任何随机/真实时钟。
+ * 合规：全文案过 31 词禁用表（scripts/check-bili-compliance.mjs 会再验一遍）。
+ * ============================================================ */
+const DUR = 75, FPS = 30, TRANS = 0.5;
+
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,k)=>a+(b-a)*k;
+const ease=p=>1-Math.pow(1-clamp(p,0,1),3);
+const easeOut=p=>1-Math.pow(1-clamp(p,0,1),2.2);
+const seg=(p,a,b)=>clamp((p-a)/(b-a),0,1);
+const fade=(p,fin=0.22,fout=0.22)=>clamp(p/fin,0,1)*clamp((1-p)/fout,0,1);
+const rnd=i=>{const x=Math.sin(i*127.1+311.7)*43758.5453;return x-Math.floor(x);};
+
+const SHOT=n=>`../shots/${n}.png`;
+/* 合规徽标：不用 app 图标（图标里是「刷」字），网页画一个「课」字渐变方块 */
+const LOGO_MARK=(px,r=0.24,fs=0.56)=>`<div style="width:${px}px;height:${px}px;border-radius:${Math.round(px*r)}px;background:linear-gradient(140deg,#3b82f6,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:${Math.round(px*fs)}px;font-weight:800;color:#fff;box-shadow:0 18px 60px rgba(59,130,246,.45)">课</div>`;
+
+/* ---------- 动态背景（确定性） ---------- */
+function bgHtml(t){
+  const ax=Math.sin(t*0.10)*160, ay=Math.cos(t*0.13)*110;
+  const bx=Math.cos(t*0.08)*180, by=Math.sin(t*0.11)*120;
+  let parts='';
+  for(let i=0;i<26;i++){
+    const x=(rnd(i)*1920+Math.sin(t*0.15+rnd(i+50)*6.28)*40);
+    const y=(rnd(i+26)*1080+Math.cos(t*0.12+rnd(i+80)*6.28)*34);
+    const o=0.10+0.16*(0.5+0.5*Math.sin(t*0.9+rnd(i+9)*6.28));
+    const s=2+rnd(i+17)*3.4;
+    parts+=`<div style="position:absolute;left:${x.toFixed(1)}px;top:${y.toFixed(1)}px;width:${s.toFixed(1)}px;height:${s.toFixed(1)}px;border-radius:50%;background:rgba(147,197,253,${o.toFixed(3)})"></div>`;
+  }
+  return `
+  <div style="position:absolute;inset:0;background:linear-gradient(160deg,#0a1020 0%,#060a13 55%,#0a0f1d 100%)"></div>
+  <div style="position:absolute;inset:0;
+    background:
+      radial-gradient(1150px 720px at ${18+ax/18}% ${12+ay/20}%, rgba(59,130,246,.30), transparent 60%),
+      radial-gradient(950px 720px at ${86+bx/20}% ${84+by/22}%, rgba(124,58,237,.30), transparent 62%)"></div>
+  <div style="position:absolute;inset:0;opacity:.09;
+    background-image:linear-gradient(rgba(148,163,184,.35) 1px,transparent 1px),
+                     linear-gradient(90deg,rgba(148,163,184,.35) 1px,transparent 1px);
+    background-size:64px 64px;mask-image:radial-gradient(circle at 50% 45%,#000 30%,transparent 78%)"></div>
+  ${parts}
+  <div style="position:absolute;inset:0;box-shadow:inset 0 0 260px rgba(0,0,0,.75)"></div>`;
+}
+
+/* ---------- 通用小组件 ---------- */
+const tick=(size=30)=>`<span style="width:${size}px;height:${size}px;border-radius:50%;background:#22c55e;color:#052e16;display:inline-flex;align-items:center;justify-content:center;font-size:${size*0.62}px;font-weight:900;flex:0 0 auto">✓</span>`;
+
+/* ============================================================
+ * 场景
+ * ============================================================ */
+const scenes=[
+
+/* 1 · 开场 0–5 */
+{ t0:0, t1:5, name:'开场', draw(p,t){
+  const k=ease(seg(p,0,0.30)), k2=ease(seg(p,0.28,0.6));
+  const pulse=0.5+0.5*Math.sin(t*2.4);
+  const badges=['开源','完全免费','账号本地存储'];
+  return `
+  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px">
+    <div style="position:relative;width:210px;height:210px;display:flex;align-items:center;justify-content:center">
+      <div style="position:absolute;inset:${-18-pulse*10}px;border-radius:50%;border:2px solid rgba(96,165,250,${0.35-0.2*pulse});"></div>
+      <div style="position:absolute;inset:${-40-pulse*16}px;border-radius:50%;border:1px solid rgba(167,139,250,${0.22-0.12*pulse});"></div>
+      <div style="transform:scale(${lerp(.86,1,k)});opacity:${k}">${LOGO_MARK(170,0.25,0.52)}</div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:26px;opacity:${k2};transform:translateY(${(1-k2)*26}px)">
+      <span style="font-size:92px;font-weight:800;letter-spacing:2px">课程任务助手</span>
+      <span style="font-size:54px;font-weight:700;color:#93c5fd">CourseHelper</span>
+    </div>
+    <div style="display:flex;gap:18px;opacity:${ease(seg(p,0.5,0.8))}">
+      ${badges.map((b,i)=>`<span class="chip" style="font-size:26px;opacity:${seg(p,0.5+i*0.08,0.7+i*0.08)}">${b}</span>`).join('')}
+    </div>
+  </div>`;
+}},
+
+/* 2 · 痛点 5–13 */
+{ t0:5, t1:13, name:'痛点', draw(p){
+  const pains=[['一节一节等课件','时间被切成碎片'],['进度逐个核对','生怕漏了任务点'],['文档挨个翻完','无聊还不能走神'],['几十门课堆着','光想想就头疼']];
+  const count=Math.floor(ease(seg(p,0.3,0.85))*128);
+  return `
+  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:44px">
+    <div style="font-size:30px;letter-spacing:10px;color:#7dd3fc;opacity:${fade(p,0.15,0.2)}">手动时代的代价</div>
+    <div style="text-align:center;line-height:1.28;opacity:${fade(p,0.15,0.2)}">
+      <div style="font-size:76px;font-weight:800">几十门课 · <span class="gradtext num">${count}</span><span style="font-size:52px">+ 个任务点</span></div>
+      <div style="font-size:40px;color:#a8b6cf;margin-top:14px">全靠手动，一节一节来？</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:24px;width:1640px">
+      ${pains.map((c,i)=>{
+        const o=ease(seg(p,0.34+i*0.09,0.56+i*0.09));
+        return `<div class="glass" style="padding:30px 28px;opacity:${o};transform:translateY(${(1-o)*36}px)">
+          <div style="font-size:15px;color:#f87171;margin-bottom:12px;font-weight:800">✕</div>
+          <div style="font-size:30px;font-weight:700">${c[0]}</div>
+          <div style="font-size:23px;color:#8fa0ba;margin-top:10px">${c[1]}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}},
+
+/* 3 · 主界面 13–25 */
+{ t0:13, t1:25, name:'主界面', draw(p,t){
+  const op=fade(p,0.14,0.16);
+  const zoom=1.04+0.045*ease(p);
+  const drift=Math.sin(t*0.5)*6;
+  const callout=o=>`opacity:${ease(seg(p,o,o+0.14))};transform:translateY(${(1-ease(seg(p,o,o+0.14)))*18}px)`;
+  return `
+  <div style="position:absolute;inset:0">
+    <!-- 左侧：真实面板截图 -->
+    <div class="shot" style="position:absolute;left:96px;top:96px;width:700px;height:888px;opacity:${op};transform:scale(${zoom});transform-origin:28% 50%;box-shadow:0 40px 120px rgba(0,0,0,.65),0 0 0 1px rgba(148,163,184,.26),0 0 90px rgba(59,130,246,.12)">
+      <img src="${SHOT('bili-panel-dashboard')}" style="filter:brightness(1.07)"/>
+    </div>
+    <!-- 右侧：课程页面示意（通用骨架，无平台标识） -->
+    <div class="shot" style="position:absolute;right:96px;top:150px;width:880px;height:780px;opacity:${op}">
+      <div style="position:absolute;inset:0;background:linear-gradient(150deg,#141f38,#0d1628)"></div>
+      <div style="position:absolute;left:36px;top:30px;right:36px;height:44px;border-radius:10px;background:rgba(148,163,184,.22)"></div>
+      <div style="position:absolute;left:36px;top:104px;width:500px;height:290px;border-radius:14px;background:rgba(59,130,246,.20);display:flex;align-items:center;justify-content:center;border:1px solid rgba(96,165,250,.25)">
+        <div style="width:84px;height:84px;border-radius:50%;background:rgba(125,211,252,.30);display:flex;align-items:center;justify-content:center">
+          <div style="width:0;height:0;border-left:28px solid rgba(224,242,254,.95);border-top:18px solid transparent;border-bottom:18px solid transparent;margin-left:8px"></div>
+        </div>
+      </div>
+      <!-- 章节列表骨架 -->
+      <div style="position:absolute;left:36px;top:430px;right:52px;display:flex;flex-direction:column;gap:22px">
+        ${[0,1,2,3].map(i=>`
+          <div style="display:flex;align-items:center;gap:16px">
+            <div style="width:34px;height:34px;border-radius:50%;background:${i<2?'rgba(52,211,153,.30)':'rgba(148,163,184,.18)'};display:flex;align-items:center;justify-content:center;font-size:17px;color:#a7f3d0">${i<2?'✓':''}</div>
+            <div style="flex:1;height:22px;border-radius:7px;background:rgba(148,163,184,${0.26-i*0.04})"></div>
+            <div style="width:120px;height:22px;border-radius:7px;background:rgba(148,163,184,.14)"></div>
+          </div>`).join('')}
+      </div>
+      <div style="position:absolute;inset:0;background:rgba(10,15,28,.10)"></div>
+      <div style="position:absolute;left:0;right:0;bottom:26px;text-align:center;font-size:26px;color:#8fa0ba">课程页面（示意）</div>
+    </div>
+    <!-- 标注 -->
+    <div style="position:absolute;left:96px;top:44px;display:flex;gap:16px;${callout(0.16)}">
+      <span class="chip"><span class="dot"></span>单窗口 · 内嵌课程页面</span>
+    </div>
+    <div style="position:absolute;left:860px;top:200px;${callout(0.38)}">
+      <span class="chip" style="border-color:rgba(52,211,153,.5)">${tick(26)} 一键全选 · 已选 6 门</span>
+    </div>
+    <div style="position:absolute;left:860px;top:290px;${callout(0.5)}">
+      <span class="chip">断点续跑 · 进度一目了然</span>
+    </div>
+    <div style="position:absolute;left:96px;bottom:40px;font-size:30px;color:#cbd5e1;${callout(0.6)}">
+      左边控制台 · 右边课程页面，<span class="gradtext" style="font-weight:800">同一个窗口</span>
+    </div>
+  </div>`;
+}},
+
+/* 4 · 运行 25–37 */
+{ t0:25, t1:37, name:'运行', draw(p,t){
+  const op=fade(p,0.14,0.16);
+  const zoom=1.03+0.04*ease(p);
+  const feats=[['课件自动续播','播完一节自动进下一节'],['文档自动浏览','翻到底才算完成，不白看'],['进度实时保存','关掉重开，接着上次继续'],['随时暂停 / 停止','控制权一直在你手里']];
+  const beat=0.5+0.5*Math.sin(t*3.2);
+  return `
+  <div style="position:absolute;inset:0">
+    <div class="shot" style="position:absolute;left:90px;top:120px;width:1060px;height:864px;opacity:${op};transform:scale(${zoom});transform-origin:30% 50%">
+      <img src="${SHOT('bili-panel-monitor')}"/>
+    </div>
+    <div style="position:absolute;left:90px;top:56px;display:flex;gap:16px;opacity:${ease(seg(p,0.08,0.22))}">
+      <span class="chip"><span class="dot" style="box-shadow:0 0 ${10+8*beat}px #34d399"></span>运行中</span>
+      <span class="chip" style="border-color:rgba(148,163,184,.35)">日志实时滚动</span>
+    </div>
+    <div style="position:absolute;right:110px;top:170px;width:600px">
+      <div style="font-size:52px;font-weight:800;line-height:1.3;margin-bottom:44px;opacity:${ease(seg(p,0.1,0.26))}">
+        重复的事，<br/><span class="gradtext">交给它跑</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:26px">
+        ${feats.map((f,i)=>{
+          const o=ease(seg(p,0.24+i*0.11,0.42+i*0.11));
+          return `<div style="display:flex;gap:18px;align-items:flex-start;opacity:${o};transform:translateX(${(1-o)*40}px)">
+            <div style="margin-top:4px">${tick(30)}</div>
+            <div><div style="font-size:32px;font-weight:700">${f[0]}</div>
+            <div style="font-size:24px;color:#8fa0ba;margin-top:6px">${f[1]}</div></div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  </div>`;
+}},
+
+/* 5 · 大模型能力 37–47 */
+{ t0:37, t1:47, name:'大模型', draw(p,t){
+  const op=fade(p,0.14,0.16);
+  const chat=[['user','（题目截图）','这题选什么？给个解析。'],
+              ['ai','','这题选 B。题干考点是……（解析要点略）识别没把握的，我会留空，不乱答。']];
+  const stream=seg(p,0.34,0.78);
+  const reply='这题选 B。题干考点是……（解析要点略）识别没把握的，我会留空，不乱答。';
+  const shown=reply.slice(0,Math.floor(reply.length*stream));
+  const cursor=stream>0&&stream<1?'<span style="display:inline-block;width:3px;height:1em;background:#7dd3fc;vertical-align:-2px;margin-left:2px"></span>':'';
+  return `
+  <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+    <div class="glass" style="width:1180px;height:760px;opacity:${op};transform:translateY(${(1-ease(seg(p,0,0.2)))*30}px);padding:44px 48px;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:34px">
+        <span class="chip" style="font-size:24px">接入你自己的大模型接口</span>
+        <span style="font-size:22px;color:#64748b">效果示意</span>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:28px;justify-content:center">
+        <div style="display:flex;justify-content:flex-end;opacity:${ease(seg(p,0.12,0.26))}">
+          <div style="max-width:760px;background:rgba(59,130,246,.16);border:1px solid rgba(59,130,246,.4);border-radius:20px 20px 4px 20px;padding:24px 30px">
+            <div style="display:flex;gap:14px;align-items:center;margin-bottom:14px">
+              <div style="width:120px;height:72px;border-radius:10px;background:linear-gradient(140deg,#1e293b,#0f172a);border:1px solid rgba(148,163,184,.3);display:flex;align-items:center;justify-content:center;font-size:18px;color:#64748b">题目截图</div>
+              <span style="font-size:28px">这题选什么？给个解析。</span>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-start;opacity:${ease(seg(p,0.28,0.4))}">
+          <div style="max-width:820px;background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.28);border-radius:20px 20px 20px 4px;padding:24px 30px">
+            <div style="font-size:15px;color:#34d399;font-weight:800;margin-bottom:10px">✓ 已解析</div>
+            <div style="font-size:28px;line-height:1.55">${shown}${cursor}</div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;justify-content:center;opacity:${ease(seg(p,0.7,0.86))}">
+        ${['自己的 Key 自己填','图片题也能看懂','不会乱答'].map(s=>`<span class="chip" style="font-size:23px;border-color:rgba(148,163,184,.3)">${s}</span>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}},
+
+/* 6 · 安全性 47–55 */
+{ t0:47, t1:55, name:'安全', draw(p,t){
+  const op=fade(p,0.14,0.16);
+  const pulse=0.5+0.5*Math.sin(t*2.2);
+  const items=[['账号只存在你的电脑上','本机加密存储，不上传','💾'],['需要人工确认的环节，它会停下等你','扫码 / 确认类弹窗也不例外','🖐️'],['不会绕过任何一步','过不去就停在原地，交还给你','🛡']];
+  return `
+  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:52px">
+    <div style="position:relative;width:150px;height:150px;display:flex;align-items:center;justify-content:center;opacity:${op}">
+      <div style="position:absolute;inset:${-14-pulse*8}px;border-radius:50%;border:2px solid rgba(52,211,153,${0.4-0.22*pulse})"></div>
+      <div style="width:120px;height:120px;border-radius:32px;background:linear-gradient(140deg,#059669,#10b981);display:flex;align-items:center;justify-content:center;font-size:62px;box-shadow:0 20px 70px rgba(16,185,129,.4)">🛡</div>
+    </div>
+    <div style="font-size:56px;font-weight:800;opacity:${op}">你的账号，<span class="gradtext">你做主</span></div>
+    <div style="display:flex;flex-direction:column;gap:22px;width:1180px">
+      ${items.map((it,i)=>{
+        const o=ease(seg(p,0.2+i*0.14,0.38+i*0.14));
+        return `<div class="glass" style="display:flex;align-items:center;gap:24px;padding:26px 34px;opacity:${o};transform:translateX(${(1-o)*46}px)">
+          <div style="width:58px;height:58px;border-radius:16px;background:rgba(52,211,153,.14);display:flex;align-items:center;justify-content:center;font-size:30px">${it[2]}</div>
+          <div style="flex:1"><div style="font-size:31px;font-weight:700">${it[0]}</div>
+          <div style="font-size:23px;color:#8fa0ba;margin-top:5px">${it[1]}</div></div>
+          <div>${tick(30)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}},
+
+/* 7 · 三步安装 55–65 */
+{ t0:55, t1:65, name:'安装', draw(p){
+  const op=fade(p,0.14,0.16);
+  const stepIdx=Math.min(2,Math.floor(seg(p,0.1,0.78)*3));
+  const steps=[['1','下载安装包','CourseHelper-Setup-2.1.2.exe'],['2','一路「下一步」','选「仅为我安装」，点安装'],['3','完成，直接用','桌面出现图标，打开就能用']];
+  const win=(a,b)=>seg(p,a,Math.min(a+0.06,b))*clamp((b-p)/0.06,0,1);
+  return `
+  <div style="position:absolute;inset:0">
+    <!-- 安装向导（网页示意） -->
+    <div class="shot" style="position:absolute;left:110px;top:230px;width:820px;height:600px;background:#0d1526;opacity:${op}">
+      <div style="height:52px;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid rgba(148,163,184,.15)">
+        <i style="width:14px;height:14px;border-radius:50%;background:#f87171;display:block"></i>
+        <i style="width:14px;height:14px;border-radius:50%;background:#fbbf24;display:block"></i>
+        <i style="width:14px;height:14px;border-radius:50%;background:#34d399;display:block"></i>
+        <span style="margin-left:12px;font-size:20px;color:#8fa0ba">课程任务助手 · 安装向导</span>
+      </div>
+      <div style="padding:36px 44px;font-size:26px;line-height:2.1;color:#cbd5e1">
+        ${['欢迎安装向导','选择安装位置','安装完成'].map((s,i)=>`
+          <div style="display:flex;align-items:center;gap:14px;color:${i===stepIdx?'#e8edf7':'#64748b'}">
+            <span style="width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;
+              background:${i<stepIdx?'#22c55e':i===stepIdx?'linear-gradient(135deg,#60a5fa,#a78bfa)':'rgba(148,163,184,.2)'};color:${i<=stepIdx?'#052e16':'#94a3b8'}">${i<stepIdx?'✓':i+1}</span>${s}
+          </div>`).join('')}
+        <div style="margin-top:26px;height:10px;border-radius:6px;background:rgba(148,163,184,.15);overflow:hidden">
+          <div style="height:100%;width:${Math.round(seg(p,0.1,0.85)*100)}%;background:linear-gradient(90deg,#3b82f6,#a855f7)"></div>
+        </div>
+      </div>
+    </div>
+    <div style="position:absolute;right:120px;top:210px;width:760px">
+      <div style="font-size:56px;font-weight:800;margin-bottom:46px;opacity:${ease(seg(p,0.04,0.2))}">三步装好，<span class="gradtext">零配置</span></div>
+      <div style="display:flex;flex-direction:column;gap:30px">
+        ${steps.map((s,i)=>{
+          const o=ease(seg(p,0.14+i*0.14,0.3+i*0.14));
+          const active=i===stepIdx, done=i<stepIdx;
+          return `<div style="display:flex;gap:22px;align-items:center;opacity:${o};transform:translateX(${(1-o)*34}px)">
+            <div style="width:64px;height:64px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#0b1220;
+              background:${done?'linear-gradient(135deg,#34d399,#10b981)':active?'linear-gradient(135deg,#60a5fa,#a78bfa)':'rgba(148,163,184,.25)'}">${done?'✓':s[0]}</div>
+            <div><div style="font-size:33px;font-weight:700">${s[1]}</div>
+            <div style="font-size:23px;color:#8fa0ba;margin-top:5px">${s[2]}</div></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="margin-top:42px;padding:20px 26px;border-radius:16px;background:rgba(250,204,21,.09);border:1px solid rgba(250,204,21,.32);
+        font-size:22px;color:#fde68a;line-height:1.65;opacity:${ease(seg(p,0.62,0.8))}">
+        小提示：首次运行 Windows 可能提示「已保护你的电脑」→ 点「更多信息」→「仍要运行」即可
+      </div>
+    </div>
+  </div>`;
+}},
+
+/* 8 · 结尾 65–75 */
+{ t0:65, t1:75, name:'结尾', draw(p,t){
+  const k=ease(seg(p,0,0.3));
+  const star=0.5+0.5*Math.sin(t*2.6);
+  return `
+  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px">
+    <div style="display:flex;align-items:center;gap:24px;opacity:${k};transform:translateY(${(1-k)*24}px)">
+      ${LOGO_MARK(92,0.26,0.5)}
+      <span style="font-size:60px;font-weight:800">课程任务助手 CourseHelper</span>
+    </div>
+    <div style="font-size:44px;color:#a8b6cf;opacity:${ease(seg(p,0.16,0.36))}">
+      开源 · 免费 · 把重复交给工具，把时间留给自己
+    </div>
+    <div style="display:flex;gap:26px;opacity:${ease(seg(p,0.3,0.5))}">
+      <div class="glass" style="padding:24px 38px;font-size:27px;color:#cbd5e1">
+        <span style="font-size:38px;vertical-align:-6px">⭐</span> 开源地址（见视频简介）<br/>
+        <span style="font-size:23px;color:#7dd3fc">github.com / gitcode 双镜像</span>
+      </div>
+      <div class="glass" style="padding:24px 38px;font-size:27px;color:#cbd5e1">
+        <span style="font-size:38px;vertical-align:-6px;color:#ffe14d;text-shadow:0 0 ${8+10*star}px rgba(255,225,77,.8)">★</span> 觉得有用，点个关注
+      </div>
+    </div>
+    <div style="font-size:26px;color:#64748b;letter-spacing:2px;opacity:${ease(seg(p,0.55,0.75))}">
+      请理性使用 · 遵守课程要求
+    </div>
+  </div>`;
+}},
+];
+
+/* ---------- seek：纯函数逐帧渲染（含场景交叉淡化） ---------- */
+window.NARRATION = window.NARRATION || [];
+window.seek = function(t){
+  t = clamp(t, 0, DUR - 0.001);
+  const i = scenes.findIndex(s => t < s.t1);
+  const cur = scenes[i < 0 ? scenes.length - 1 : i];
+  const prev = i > 0 ? scenes[i - 1] : null;
+  const p = clamp((t - cur.t0) / (cur.t1 - cur.t0), 0, 1);
+  const stage = document.getElementById('stage');
+  let html = bgHtml(t);
+  const since = t - cur.t0;
+  if (prev && since < TRANS) {
+    const k = easeOut(since / TRANS);
+    html += `<div class="scene" style="opacity:${(1 - k).toFixed(3)}">${prev.draw(1, cur.t0 - 0.001)}</div>`;
+    html += `<div class="scene" style="opacity:${k.toFixed(3)}">${cur.draw(p, t)}</div>`;
+  } else {
+    html += `<div class="scene" style="opacity:1">${cur.draw(p, t)}</div>`;
+  }
+  stage.innerHTML = html;
+  const sub = window.NARRATION.find(s => t >= s.t0 && t <= s.t1);
+  const subEl = document.getElementById('subtitle');
+  if (sub) {
+    const sp = (t - sub.t0) / 0.22, ep = (sub.t1 - t) / 0.3;
+    subEl.style.opacity = clamp(sp, 0, 1) * clamp(ep, 0, 1);
+    document.getElementById('subtext').textContent = sub.text;
+  } else subEl.style.opacity = 0;
+  document.getElementById('prog').style.width = (t / DUR * 100) + '%';
+  return cur.name;
+};
+window.seek(0);
+</script>
+</body>
+</html>

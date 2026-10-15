@@ -4,7 +4,7 @@ import type { AnswerChannel, QType, QuizOption, QuizQuestion } from './quizTypes
 import { CacheSearcher, LlmSearcher, resolveAnswers, type Searcher } from './searcher';
 import { VisionSearcher } from './visionSearcher';
 import type { TikuStore } from './tiku';
-import { activeJob, jobFrameFinished } from './jobpoint';
+import { activeJob, jobFrameFinished, hasUnfinishedVideoJob } from './jobpoint';
 
 export type { QType, QuizOption, QuizQuestion, AnswerChannel } from './quizTypes';
 
@@ -994,6 +994,14 @@ export async function isQuizPage(page: Page): Promise<boolean> {
   if (active.kind === 'quiz') return true;
 
   // ↓ 类型未知才走的老路，保留以兼容判不出任务点的老课程页
+  //
+  // 但走之前必须先确认：本章没有待播的视频任务点。
+  // 下面三步（弹窗 / 测验 frame URL / 正文）问的都是「页面上有没有测验」，
+  // 而混合章节里测验 iframe 本来就一直挂在 DOM 里——视频还没播，
+  // 这一步就会返回 true，整章被劫持到答题分支（用户反馈：
+  // 「一个章节同时出现视频和题目，没放完视频就去答题」）。
+  if (await hasUnfinishedVideoJob(page)) return false;
+
   if (await findQuizPopup(page)) return true;
   const frames = await findQuizFrames(page);
   for (const f of frames) {
