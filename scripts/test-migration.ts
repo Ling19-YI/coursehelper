@@ -18,7 +18,11 @@ import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { migrateDirInto } from '../src/shared/paths';
+import {
+  migrateDirInto,
+  rewriteDataDirInSettings,
+  LEGACY_DIR_NAMES,
+} from '../src/shared/paths';
 
 let passed = 0;
 function ok(name: string) {
@@ -143,6 +147,56 @@ try {
       '账号文件不得被旧目录覆盖'
     );
     ok('不覆盖用户更新的文件');
+  }
+
+  console.log('\n【6】settings.dataDir 指向旧目录时必须重写');
+  {
+    const root = newSandbox();
+    const target = path.join(root, 'current-appdir');
+    fs.mkdirSync(target, { recursive: true });
+    // 模拟：文件已迁移过（所以 migrateDirInto 会跳过），但 dataDir 还指着旧名
+    fs.writeFileSync(
+      path.join(target, 'settings.json'),
+      JSON.stringify({
+        // 必须用**真实的**旧目录名：rewriteDataDirInSettings 靠 LEGACY_DIR_NAMES
+        // 名单判定，沙箱别名（legacy-appdir）不匹配，就测不到这条分支了。
+        dataDir: path.join(root, LEGACY_DIR_NAMES[0], 'data'),
+        videoSpeed: 1.5,
+      }),
+      'utf-8'
+    );
+    const moved = rewriteDataDirInSettings(target);
+    assert.ok(moved, '应当重写 dataDir');
+    const after = JSON.parse(fs.readFileSync(path.join(target, 'settings.json'), 'utf-8'));
+    assert.strictEqual(
+      after.dataDir,
+      path.join(target, 'data'),
+      'dataDir 必须指向新目录下的 data'
+    );
+    assert.strictEqual(after.videoSpeed, 1.5, '重写不得影响其它设置项');
+    ok('dataDir 重写到新目录');
+  }
+
+  console.log('\n【7】用户自定义到别处的 dataDir 不能被改');
+  {
+    const root = newSandbox();
+    const target = path.join(root, 'current-appdir');
+    fs.mkdirSync(target, { recursive: true });
+    const custom = path.join(root, 'D', '我的课程进度');
+    fs.mkdirSync(custom, { recursive: true });
+    fs.writeFileSync(
+      path.join(target, 'settings.json'),
+      JSON.stringify({ dataDir: custom }),
+      'utf-8'
+    );
+    const changed = rewriteDataDirInSettings(target);
+    assert.strictEqual(changed, false, '不在 legacy 名单里的路径不得改动');
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(path.join(target, 'settings.json'), 'utf-8')).dataDir,
+      custom,
+      '用户自定义目录被覆盖了'
+    );
+    ok('保留用户自定义目录');
   }
 
   console.log(`\n迁移测试全部通过（${passed} 项）`);

@@ -176,8 +176,12 @@ check(
   '有绕过闸门的记账点'
 );
 check(
-  '三条完成路径都走 markDone()',
-  (index.match(/if \(markDone\(\)\) summary\.completed\+\+;/g) || []).length === 2 &&
+  '所有完成路径都走 markDone()',
+  // 计数是 3 而非 2：分页章节「全部任务点本来就已完成」也是一条完成路径，
+  // 它同样必须记账，且同样要过 manualJumpIndex 闸门（用户中途切走时不能记）。
+  // 断言写成 >=2 而不是硬编码，是为了让新增完成路径不被无声漏掉；
+  // 真正的守门是下面那条「闸门在 markDone 内部」，以及 markDone 的定义本身。
+  (index.match(/if \(markDone\(\)\) summary\.completed\+\+;/g) || []).length >= 2 &&
     /if \(credited && markDone\(\)\) \{/.test(index),
   '答题/视频/文档里有直接记账的'
 );

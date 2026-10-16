@@ -703,8 +703,13 @@ export class ChaoxingEngine {
               // 旧结构（多任务点并列同页）jobTabs 为空，走下面原有的
               // activeJob / scroll2Job 分支，行为与改动前一致。
               if (jobTabs.length > 1) {
-                // 找到一个还没做完的标签；全都做完了就收手。
-                let moved = false;
+                // 逐个标签推进：一个标签没有未完成的任务点就跳下一个。
+                // ⚠️ 必须区分「全部标签都已完成」与「还有标签没看」——
+                //   前者是本章真的做完了，后者只是轮到这一个该做的事。
+                //   实测踩过的坑：把「跳过了已完成的任务点」当成「本章已完成」，
+                //   于是测验因答题设置关掉被跳过后，仍报「任务点已全部处理完毕」，
+                //   完成数虚增，用户以为做完了其实一题没做。
+                let allDone = false;
                 while (tabIndex < jobTabs.length) {
                   const next = tabIndex + 1;
                   const switched = await activateJobTab(
@@ -715,11 +720,9 @@ export class ChaoxingEngine {
                   );
                   if (!switched) {
                     this.log('warn', `    ⚠ 无法切到第 ${next} 个任务点，跳过本章剩余任务点`);
-                    tabIndex = jobTabs.length;
                     break;
                   }
                   tabIndex = next;
-                  moved = true;
                   // 切到的那一页里还有未完成的任务点吗？
                   const here = await activeJob(this.opts.page);
                   if (here.total > 0 && here.finished < here.total) break;
@@ -728,10 +731,13 @@ export class ChaoxingEngine {
                     `    · 第 ${next} 个任务点（${jobTabs[next - 1].label}）已完成，跳下一个`
                   );
                 }
-                if (!moved) {
-                  summary.completed += 0;
+                if (tabIndex >= jobTabs.length) {
+                  allDone = true;
+                }
+                if (allDone) {
+                  if (markDone()) summary.completed++;
                   result = 'completed';
-                  this.log('ok', '    ✓ 本章任务点已全部完成');
+                  this.log('ok', '    ✓ 本章任务点已全部完成（此前已完成，无需重做）');
                   break;
                 }
                 await this.hooks.ctl.sleep(1200);

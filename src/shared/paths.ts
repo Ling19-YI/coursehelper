@@ -116,6 +116,43 @@ function copyPath(from: string, to: string): void {
 }
 
 /**
+ * 把 settings.json 里的 dataDir 从旧目录改写到新目录。
+ *
+ * ── 为什么必须做这一步 ──
+ * `AppSettings.dataDir` 存的是**绝对路径**（用户可在设置页自定义）。
+ * 改 productName 之后，文件搬过来了，但这个字段还指着旧目录：
+ *
+ *   "dataDir": "C:\\Users\\...\\AppData\\Roaming\\刷课助手 CourseHelper\\data"
+ *
+ * 结果是学习进度读写到一个「搬过去了但没人再往里写」的目录 ——
+ * 表现是「章节被反复重做、进度永远记不上」，而且**不报任何错**。
+ * 实测（2026-10-17）就是踩到了这个：本机迁移后 dataDir 仍指旧目录，
+ * createWindow 因 copyfile ENOENT 直接失败。
+ *
+ * 只改指向旧**目录名**的路径；用户自定义到别处的（不在 legacy 名单里）一律不动。
+ */
+export function rewriteDataDirInSettings(targetRoot: string): boolean {
+  const file = path.join(targetRoot, 'settings.json');
+  try {
+    if (!fs.existsSync(file)) return false;
+    const s = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const cur = typeof s.dataDir === 'string' ? s.dataDir : '';
+    if (!cur) return false;
+    // 已经指向新目录或用户自定义目录 → 不动
+    const hitsLegacy = LEGACY_DIR_NAMES.some(name => cur.indexOf(name) >= 0);
+    if (!hitsLegacy) return false;
+    s.dataDir = path.join(targetRoot, 'data');
+    fs.writeFileSync(file, JSON.stringify(s, null, 2), 'utf-8');
+    console.log(`[paths] 已把 settings.dataDir 重写到新目录: ${s.dataDir}`);
+    return true;
+  } catch (e) {
+    // 改不了就让用户自己在设置页改，不要拦住启动
+    console.warn('[paths] 重写 settings.dataDir 失败，可在设置页手动指定数据目录:', e);
+    return false;
+  }
+}
+
+/**
  * 把旧目录里的用户数据搬到新目录。
  *
  * 幂等：没有旧目录、或新目录已有数据时都直接返回。
@@ -132,7 +169,14 @@ export function migrateUserDataDir(): MigrationResult | null {
       // 旧目录原地保留，见文件头说明。
       console.log(`[paths] 已迁移旧数据目录 ${legacy} → ${APP_DIR_NAME}: ${r.files.join(', ')}`);
     }
+    // ⚠️ 不管这次有没有搬，都必须重写 dataDir。
+    // 上一轮已经迁过的用户，新目录里已有 settings.json（于是 migrateDirInto
+    // 会跳过），但那个文件里的 dataDir 还指着旧目录 —— 不改就是进度永远记不上。
+    rewriteDataDirInSettings(target);
     return r;
   }
+
+  // 没有旧目录可搬（全新安装，或只剩新目录），同样要查一遍 dataDir
+  rewriteDataDirInSettings(target);
   return null;
 }
