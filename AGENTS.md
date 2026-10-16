@@ -537,3 +537,74 @@ GitCode 的 release 建完无法用 API 改，说明必须先写对。
 5. **改完跑 `npm run typecheck`**
 6. **发布前跑 preflight**
 7. **不确定就问，不要猜着改**——尤其是账号、答题、发布相关的逻辑
+
+---
+
+## 十一、2026-10-16 真机实测：目录计数与页面结构的矛盾
+
+用测试账号（`tools/keys/test-account.json`，已被 gitignore 双重忽略）**只读**探测
+「改革开放史」课程，拿到一批与代码假设冲突的事实。**动手改任务点相关逻辑前先读这一节。**
+
+探测脚本一律 `scripts/local-probe-*.mjs`（gitignored），**只读 DOM，不播放不答题**。
+
+### 事实 1：课程主页已全面 Vue 化
+
+- 课程详情页 frame：`mooc1.chaoxing.com/course-ans-vue/88/detail.html?...model=template2`
+- 该 frame 内 `[onclick*="toOld"]` = **0 个**，`input.knowledgeJobCount` = **0 个**
+- 必须点「进入课程」跳到 `mooc2-ans.chaoxing.com/mooc2-ans/mycourse/stu`，
+  再由它加载 `mycourse/studentcourse` 目录 frame —— 那一层 `toOld` 才有 **40 个**
+- **直接访问 `stu` 地址时目录 frame 不就绪**（读到 0 条章节）。必须走「课程页 → 进入课程」
+
+### 事实 2：`jobUnfinishCount` 在这个账号上读不到有效值 ⚠️
+
+- `window.getJobCount()` 实测返回 **0**
+- `input[name="jobUnfinishCount"]` / `.jobUnfinishCount` 在 studentstudy 页**不存在**
+- 引擎 `video.ts` 的 `readUnfinishedCount()` 因此返回 **null**
+- `index.ts` 拿到 null 后 `break`（「读不到就别自作聪明地循环」）
+- ⚠️ `video.ts` 里那句注释「实机见到 4 个 `.jobUnfinishCount`」是**旧版页面**的实测，
+  在当前页面上已经不成立。任何依赖它的判断都需要重新验证。
+
+### 事实 3：`knowledgeJobCount` 不是任务点总数
+
+目录里未完成的章节，`input.knowledgeJobCount` 的值是 **1**，同时文本显示
+「11个待完成任务点」。**两个数都不是本章任务点总数**：
+- `knowledgeJobCount` = 已完成数
+- 文本里的「N 个待完成任务点」= **课程级**待完成总数（40 个未完成章节全显示 11）
+
+因此 `index.ts` 里
+`if (chapter.jobCount > 0 && active.total < chapter.jobCount)` 这条告警会**恒成立**，
+属于噪声，`wantJobs` 的收敛语义也需要重新定义。
+
+### 事实 4：章节测验是懒加载的，初始不在 DOM 里
+
+进入章节后实测：
+- 章节详情文本写明 `1视频 2章节测验`
+- `knowledge/cards` frame 里 `.ans-job-icon` 只有 **1 个**（视频，且已带 `ans-job-finished`）
+- 第二个 `ans-attach-ct` 是**讨论区**（`insertbbs`），不是任务点
+- **没有任何测验 iframe**
+
+即任务点逐个滚动到视口才渲染。`collectJobFrames()` 一次只能看到当前渲染的那几个，
+「本章一共有几个任务点」这个问题在页面上**根本不存在直接答案**。
+
+### 事实 5：平台自己的判定函数（可直接借用）
+
+`studentstudy` 的 window 上有：
+- `getJobCount(obj)` — 遍历 `.jobUnfinishCount` 求和（实测返回 0）
+- `checkJob()` — 「`#iframe`.contents() 里 `.ans-job-icon` 有没有非 `ans-job-finished` 的」
+- `jobflag()` — 统计 `frames[0].document` 里 `.ans-job-icon` 与 `.ans-job-finished` 的数量
+- `scroll2Job()` — 滚到第一个未完成的 `.ans-job-icon` 的父容器
+
+**关键差异**：平台判定「还有没有活」用的是**数图标 + 查完成标记**，
+不是读计数 input。引擎若继续依赖 `jobUnfinishCount`，课程页一改版就全线失效。
+
+### 当前判断
+
+v2.1.3 里 `hasUnfinishedVideoJob()` 那道闸针对的是「unknown 回退被测验 iframe 劫持」。
+**实测中混合章节的测验 iframe 压根不在 DOM 里，那道闸不会触发** ——
+它无害，但没有打到用户反馈的那个点上。
+
+用户反馈的「同章节视频和题目，没放完视频就去答题」，最可能的真实成因是**事实 2**：
+`readUnfinishedCount()` 返回 null → 一轮之后 `break`，或「待完成数被判为已清零」而提前收手。
+
+**下一步动手前先确认**：那条反馈是不是同一个账号/同一门课上的现象。
+若是，修法应转向「用 `checkJob()` 那套数图标的判据替代计数 input」，而不是继续加类型闸门。
