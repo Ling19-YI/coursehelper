@@ -607,4 +607,79 @@ v2.1.3 里 `hasUnfinishedVideoJob()` 那道闸针对的是「unknown 回退被�
 `readUnfinishedCount()` 返回 null → 一轮之后 `break`，或「待完成数被判为已清零」而提前收手。
 
 **下一步动手前先确认**：那条反馈是不是同一个账号/同一门课上的现象。
+
+---
+
+## 十二、⚠️ 已确认的根因：章节内容是「标签页分页」，测验在另一个标签里
+
+用户确认出问题的章节是 **中华民族共同体概论 3.1 夏商周王朝的建立**。
+在该章节上实测（只读）拿到了完整证据链。
+
+### 现象
+
+章节详情文本写着 **`1课程视频  2章节测验`**（共 3 个任务点），但进入章节后：
+
+| 观测项 | 实测值 |
+|---|---|
+| `.ans-job-icon` | **1 个**（视频，已带 `ans-job-finished`） |
+| cards frame 里的 iframe | **1 个**（video） |
+| `input.jobUnfinishCount` | **0 个** |
+| `window.getJobCount()` | **0** |
+| `window.checkJob()` | **false** |
+
+即：**页面只渲染了第一个任务点，剩下 2 个测验完全不在 DOM 里。**
+
+### 机制：标签页 = 任务点分页器
+
+`studentstudy` 顶部有一个 `ul.prev_ul`，每个 `li` 对应**一个任务点**：
+
+```html
+<li class="active" onclick="changeDisplayContent(1,2,'章节id','课程id','班级id','');">1课程视频</li>
+<li           onclick="changeDisplayContent(2,2,'章节id','课程id','班级id','');">2章节测验</li>
+```
+
+`changeDisplayContent(num, totalnum, chapterId, courseId, clazzid, knowledgestr, crossid)`
+做的唯一实质动作是**改 iframe 的 src**：
+
+```js
+document.getElementById("iframe").src =
+  "/mooc-ans/knowledge/cards?...&knowledgeid=" + chapterId + "&num=" + (num-1) + "...";
+```
+
+**`num` 就是任务点序号**（点第 1 个 → `num=0`，第 2 个 → `num=1`）。
+它同时把对应 `li` 加上 `.active` 并更新标题栏文本。
+
+### 引擎为什么看不见这些
+
+1. `src/main/engine/` 里**搜不到任何** `prev_ul` / `changeDisplayContent` / `prev_list` 相关逻辑。
+2. 引擎只读 `input.jobUnfinishCount`，而该页面**一个都不存在** →
+   `readUnfinishedCount()` 返回 `null` → `index.ts` 拿到 null 就 `break`，
+   **于是一章只做第一个任务点就收手**。
+3. 于是用户看到的是：视频任务点因为已播完被跳过，程序判定「本章没有活」，
+   转而去找能做的其它任务 —— 表现就是「没放完视频就去答题」。
+
+### 修法方向（已由实测确定，不是推测）
+
+任务点不是「并列在同一个页面里」，而是**按 `num` 分页渲染**。
+引擎必须**主动遍历标签页**，而不是指望一次读到全部任务点：
+
+- 读 `ul.prev_ul > li` 得到本章共有几个任务点（`totalnum`）
+- 对每个 `li`：调 `changeDisplayContent(i, totalnum, ...)` 或直接点它
+  → 等 iframe 的 src 变成 `.../knowledge/cards?...&num=i-1&...`
+  → 等 cards frame 加载完 → 这时 `collectJobFrames()` 才能看到该任务点
+  → 按类型分派（视频 / 文档 / 测验）
+- 全部标签页扫完才算本章处理完
+
+⚠️ 注意：`changeDisplayContent` 会**整页替换 iframe.src**，前一个任务点的状态
+只能靠平台的 `ans-job-finished` 标记和进度计数判断，不能靠「它还在 DOM 里」。
+`scroll2Job()` 在这个结构下也只能在**当前 num 页内**滚动。
+
+### 对既有代码的影响
+
+- `index.ts` 里 `wantJobs = chapter.jobCount` 这套逻辑作废 ——
+  `knowledgeJobCount` 实测是「已完成数」（值 1），不是总数。
+- `test-mixed-chapter.ts` 里那些断言基于「多任务点并列在同一页」的旧假设，
+  需要按分页模型重写。
+- `jobpoint.ts` 的 `collectJobFrames()` 本身没问题（它遍历 `page.frames()`），
+  但**只在当前 num 页内有效**。
 若是，修法应转向「用 `checkJob()` 那套数图标的判据替代计数 input」，而不是继续加类型闸门。

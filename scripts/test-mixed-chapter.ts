@@ -152,14 +152,24 @@ check(
   '分派未落在任务点上'
 );
 check(
-  'index 仅在本章第一轮等待任务点落定',
-  /const wantJobs = rounds === 1 \? chapter\.jobCount \|\| 0 : 0/.test(index),
-  '每轮都等会让整轮刷课变慢且无意义'
+  'index 读任务点标签页（分页模型）',
+  /const jobTabs = await listJobTabs\(this\.opts\.page\)/.test(index),
+  '未读标签页 → 分页章节只做得到第一个任务点'
 );
 check(
-  'index 识别数少于目录声明数时如实告警',
-  /目录显示本章有 \$\{chapter\.jobCount\} 个任务点，只识别到 \$\{active\.total\} 个/.test(index),
-  '出现不支持的模块类型时用户看不到任何线索'
+  '标签数 > 1 时按标签逐个处理',
+  /jobTabs\.length > 1/.test(index) && /activateJobTab\(/.test(index),
+  '没有逐标签推进的逻辑'
+);
+check(
+  '无标签页的老结构完全不受影响（jobTabs 为空时跳过全部分支）',
+  /if \(jobTabs\.length > 1\)/.test(index),
+  '老结构会被新逻辑误伤'
+);
+check(
+  '只在有标签页时才用标签数当收敛判据',
+  /jobTabs\.length > 1 \? jobTabs\.length : 0/.test(index),
+  '拿 knowledgeJobCount 当任务点总数（实测那是「已完成数」，会一直等超时）'
 );
 check(
   'index 未知类型才退回 isQuizPage',
@@ -172,9 +182,66 @@ check(
   '文档任务点白等 8s 视频元数据'
 );
 check(
-  'index 进章节时把任务点数量与类型写进日志',
-  /本章共 \$\{active\.total\} 个任务点（已完成 \$\{active\.finished\}）/.test(index),
+  'index 进章节时把任务点标签清单写进日志',
+  /本章共 \$\{jobTabs\.length\} 个任务点/.test(index),
   '识别结果不可见 = 用户下次还是无从判断'
+);
+check(
+  '待完成计数读不到时，有标签页就继续推进而不是收手',
+  /left === null[\s\S]{0,1200}?jobTabs\.length > 1 && tabIndex < jobTabs\.length[\s\S]{0,400}?continue;/.test(
+    index
+  ),
+  '⚠️ 本次根因：实测 readUnfinishedCount 恒为 null，旧逻辑在这里 break，'
+    + '「已切到第 2 个任务点、还没做完」也会被当成本章处理完了'
+);
+check(
+  '标签页扫完才算本章处理完（不再 scroll2Job 打转）',
+  /jobTabs\.length > 1 && tabIndex >= jobTabs\.length/.test(index),
+  '标签页用尽后仍在同一页空转'
+);
+
+console.log('\n[实测发现：章节内容由 ul.prev_ul 分页渲染，一次只有当前那个任务点]');
+//
+// 2026-10-16 实测（中华民族共同体概论 3.1，章节详情写着「1课程视频 2章节测验」）：
+//   .ans-job-icon 只有 1 个（视频，已完成），没有任何测验 iframe
+//   input.jobUnfinishCount 0 个 → getJobCount() 返回 0
+//   切换靠 changeDisplayContent(i, total, ...)，它只改 iframe.src 的 num 参数
+// 引擎此前完全没有这个概念，于是「一章只做得到第一个任务点」。
+check(
+  'jobpoint 导出 listJobTabs / activateJobTab',
+  /export async function listJobTabs\(/.test(job) &&
+    /export async function activateJobTab\(/.test(job),
+  '缺分页遍历入口'
+);
+check(
+  'listJobTabs 读 ul.prev_ul 的 li',
+  /querySelector\('ul\.prev_ul'\)/.test(job) && /querySelectorAll\('li'\)/.test(job),
+  '标签页选择器不对'
+);
+check(
+  'activateJobTab 优先调 changeDisplayContent 而非模拟点击',
+  /changeDisplayContent/.test(job),
+  '模拟点击可能被层叠元素挡住，且平台函数会同步更新标签高亮'
+);
+check(
+  'activateJobTab 等到 cards frame 的 num 参数对上再返回',
+  /\[?&\]num=/.test(job) && /waitCardsNum/.test(job),
+  '不等就返回 → 读到上一页的 iframe，把 A 的内容当成 B'
+);
+check(
+  '激活后等一段时间让 iframe 加载（不能立刻判类型）',
+  /await h\.ctl\.sleep\(500\)/.test(job) || /h\.ctl\.sleep\(500\)/.test(job),
+  '切完立即读会读到空 frame'
+);
+check(
+  '切换有超时上限（不会卡死）',
+  /Date\.now\(\) < deadline/.test(job) && /15000/.test(job),
+  '缺 timeout，页面异常时整轮停摆'
+);
+check(
+  'index 导入分页函数',
+  /listJobTabs/.test(index) && /activateJobTab/.test(index),
+  '调用了但没导入'
 );
 
 // ---- 6. 应用级实测（scripts/e2e-real-engine.ts）发现并修掉的问题 ----

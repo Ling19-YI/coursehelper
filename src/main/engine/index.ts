@@ -32,6 +32,8 @@ import {
   jobKindLabel,
   hasUnfinishedVideoJob,
   describeJobInventory,
+  listJobTabs,
+  activateJobTab,
 } from './jobpoint';
 import { TikuStore } from './tiku';
 import {
@@ -362,10 +364,15 @@ export class ChaoxingEngine {
       // 一个真相。「未配置」必须说清缺哪一半：密钥和地址是两个独立
       // 输入框，只填一个是最高发的误配。
       const ch = this.visionChannel();
+      // ⚠️ 必须可选链：getVision() 在「完全没配」时可能返回 null，
+      // 而这里在开跑自检阶段调用，直接 v.apiKey 会抛
+      // 「Cannot read properties of null」——用户在日志里只看到一句
+      // 「出错」，完全不知道是自己没配 AI 通道。缺配置本该是
+      // 一条正常的信息，不是致命错误。
       const v = this.opts.getVision();
       const missing: string[] = [];
-      if (!v.apiKey) missing.push('API Key');
-      if (!v.baseUrl) missing.push('接口地址');
+      if (!v?.apiKey) missing.push('API Key');
+      if (!v?.baseUrl) missing.push('接口地址');
       this.log(
         'info',
         ch
@@ -648,6 +655,25 @@ export class ChaoxingEngine {
             return true;
           };
 
+          /**
+           * 本章的任务点标签页（见 jobpoint.ts 的 listJobTabs 说明）。
+           *
+           * 实测：任务点由 ul.prev_ul 分页，一次只渲染当前那个。旧结构
+           * （多任务点并列同页）返回空数组，下面所有 tab 逻辑自动跳过，
+           * 行为与改动前完全一致 —— 这条回退路径是刻意保留的。
+           */
+          const jobTabs = await listJobTabs(this.opts.page);
+          if (jobTabs.length > 1) {
+            this.log(
+              'info',
+              `    本章共 ${jobTabs.length} 个任务点（${jobTabs
+                .map(t => t.label)
+                .join(' / ')}），逐个处理`
+            );
+          }
+          /** 当前轮到第几个标签页；0 表示还没开始遍历 */
+          let tabIndex = 0;
+
           for (;;) {
             if (++rounds > MAX_ROUNDS) {
               this.log('warn', `    ⚠ 本章已处理 ${MAX_ROUNDS} 轮仍未完成，放弃`);
@@ -670,6 +696,47 @@ export class ChaoxingEngine {
             try {
               // 本轮不再点章节——页面已在本章，靠 scroll2Job 在本页内切换任务点
               //
+              // 本章的任务点标签页（见 jobpoint.ts 的说明）：
+              // 任务点由 ul.prev_ul 分页渲染，一次只有当前那个在 DOM 里。
+              //
+              // 这里按标签序号推进：一个标签处理完就跳下一个，直到全部扫完。
+              // 旧结构（多任务点并列同页）jobTabs 为空，走下面原有的
+              // activeJob / scroll2Job 分支，行为与改动前一致。
+              if (jobTabs.length > 1) {
+                // 找到一个还没做完的标签；全都做完了就收手。
+                let moved = false;
+                while (tabIndex < jobTabs.length) {
+                  const next = tabIndex + 1;
+                  const switched = await activateJobTab(
+                    this.opts.page,
+                    this.hooks,
+                    next,
+                    jobTabs.length
+                  );
+                  if (!switched) {
+                    this.log('warn', `    ⚠ 无法切到第 ${next} 个任务点，跳过本章剩余任务点`);
+                    tabIndex = jobTabs.length;
+                    break;
+                  }
+                  tabIndex = next;
+                  moved = true;
+                  // 切到的那一页里还有未完成的任务点吗？
+                  const here = await activeJob(this.opts.page);
+                  if (here.total > 0 && here.finished < here.total) break;
+                  this.log(
+                    'info',
+                    `    · 第 ${next} 个任务点（${jobTabs[next - 1].label}）已完成，跳下一个`
+                  );
+                }
+                if (!moved) {
+                  summary.completed += 0;
+                  result = 'completed';
+                  this.log('ok', '    ✓ 本章任务点已全部完成');
+                  break;
+                }
+                await this.hooks.ctl.sleep(1200);
+              }
+
               // 「本章该做哪一种任务点」必须按**当前活跃任务点**判，不能只问
               // 「DOM 里有没有测验 iframe」。一个章节可以并列挂 视频+测验+文档，
               // 三个 iframe 一进页面就同时在 DOM 里——旧逻辑一见测验 iframe 就
@@ -679,24 +746,19 @@ export class ChaoxingEngine {
               // 刚进章节那一轮还要先等任务点 iframe 的 URL 落定：iframe 是先
               // 创建后导航，提交顺序不保证与 DOM 次序一致，可能只看得见先提交的
               // 测验 iframe 而把整章误判成测验（同一 bug 换了触发时机）。
-              // 用目录声明的任务点总数当收敛判据。
-              const wantJobs = rounds === 1 ? chapter.jobCount || 0 : 0;
+              //
+              // ⚠️ wantJobs 只在有标签页时才有意义（那是本章任务点数量的真实来源）。
+              // 无标签页时传 0 —— 实测 input.knowledgeJobCount 的值是「已完成数」
+              // 而不是总数，拿它当收敛判据会一直等超时。
+              const wantJobs = rounds === 1 && jobTabs.length > 1 ? jobTabs.length : 0;
               const active = await activeJob(this.opts.page, wantJobs);
               if (rounds === 1) {
                 if (active.total > 1) {
                   this.log(
                     'info',
-                    `    本章共 ${active.total} 个任务点（已完成 ${active.finished}），当前是${
+                    `    当前页识别到 ${active.total} 个任务点（已完成 ${active.finished}），当前是${
                       active.job ? jobKindLabel(active.kind) : '未能判定的类型'
                     }`
-                  );
-                }
-                // 识别数少于目录声明的任务点数 = 有暂不支持的模块类型，
-                // 如实说出来，别让它变成「无声跳过」。
-                if (chapter.jobCount > 0 && active.total < chapter.jobCount) {
-                  this.log(
-                    'warn',
-                    `    ⚠ 目录显示本章有 ${chapter.jobCount} 个任务点，只识别到 ${active.total} 个（可能有暂不支持的模块类型，将尽力完成能识别的）`
                   );
                 }
               }
@@ -874,7 +936,23 @@ export class ChaoxingEngine {
 
             let left = await readUnfinishedCount(this.opts.page);
             if (left === null) {
-              // 读不到就别自作聪明地循环，回目录由外层推进
+              // ⚠️ 分页模型下这是**最常见**的分支，不是异常情况。
+              // 实测（2026-10-16）：input.jobUnfinishCount 在当前课程页里
+              // 一个都不存在，readUnfinishedCount 恒为 null。
+              // 旧逻辑在这里直接 break —— 于是「标签页已切到第 2 个任务点、
+              // 还没做完」也会被当成「本章处理完了」，用户看到的就是
+              // 「视频没放完就去答题」（实际是第一个任务点早已完成，
+              // 程序把本章判成没活可干）。
+              //
+              // 正确做法：有标签页就继续按标签推进，标签扫完才算完。
+              if (jobTabs.length > 1 && tabIndex < jobTabs.length) {
+                this.log(
+                  'info',
+                  `    → 平台未提供待完成计数，改按任务点标签推进（已处理 ${tabIndex}/${jobTabs.length}）`
+                );
+                continue;
+              }
+              // 没有标签页的老结构：读不到就别自作聪明地循环
               break;
             }
             // 本轮确实完成了一个任务点，但平台的计数还没降下来 —— 它是异步记账的
@@ -890,9 +968,15 @@ export class ChaoxingEngine {
               if (dropped !== null) left = dropped;
             }
             if (left <= 0) {
-              if (rounds > 1 || chapter.jobCount > 1) {
+              if (rounds > 1 || jobTabs.length > 1) {
                 this.log('ok', '    ✓ 本章任务点已全部完成');
               }
+              break;
+            }
+            // 标签页已全部扫完：分页模型下再循环也是同一页打转。
+            // 没有标签页的老结构不受影响，继续按 scroll2Job 往下走。
+            if (jobTabs.length > 1 && tabIndex >= jobTabs.length) {
+              this.log('ok', '    ✓ 本章任务点已全部处理完毕');
               break;
             }
             // 待完成数没下降说明本轮白跑（多半是又把同一个任务点播了一遍）。

@@ -1,4 +1,5 @@
 import type { Page, Frame } from 'playwright';
+import type { EngineHooks } from './hooks';
 
 /**
  * 章节内的「任务点」（知识卡）。
@@ -311,6 +312,151 @@ export async function describeJobInventory(page: Page): Promise<
   } catch {
     return [];
   }
+}
+
+/**
+ * 本章的任务点标签页。
+ *
+ * ── 为什么需要 ──
+ * 实测（2026-10-16，中华民族共同体概论 3.1）发现：任务点**不是并列渲染在同一页**，
+ * 而是由顶部 `ul.prev_ul` 做**分页**，一次只渲染当前那一个：
+ *
+ *   <li class="active" onclick="changeDisplayContent(1,2,章节id,课程id,班级id,'')">1课程视频</li>
+ *   <li           onclick="changeDisplayContent(2,2,章节id,课程id,班级id,'')">2章节测验</li>
+ *
+ * `changeDisplayContent` 的唯一实质动作是改 iframe 的 src：
+ *   `/mooc-ans/knowledge/cards?...&knowledgeid=<章节id>&num=<序号-1>&...`
+ * 即 `num` 就是任务点序号。章节详情写着「1课程视频 2章节测验」，但 DOM 里
+ * 只有 1 个 `.ans-job-icon`（视频），两个测验 iframe 压根不存在。
+ *
+ * 于是引擎此前「进入章节 → 读任务点 → 判类型」的整套流程只看得到第1 个任务点，
+ * 而 `input.jobUnfinishCount` 在这个页面里一个都没有，`readUnfinishedCount()`
+ * 返回 null，`index.ts` 一轮之后就 break —— 用户看到的就是
+ * 「视频没放完就去答题」（实际上视频那个任务点早已完成，程序判定本章没活可干了）。
+ *
+ * ── 怎么用 ──
+ * `listJobTabs()` 读出标签页；`activateJobTab()` 切到第 n 个并等 cards frame
+ * 加载完。**切换是整页替换 iframe.src**，前一个任务点会从 DOM 消失，
+ * 所以「本章还有没有活」不能靠「它还在不在页面里」判断。
+ */
+export interface JobTab {
+  /** 1 起算的序号，与 changeDisplayContent 的第一个参数一致 */
+  index: number;
+  /** 标签文本，如「1课程视频」「2章节测验」 */
+  label: string;
+  /** 是否是当前激活的那个 */
+  active: boolean;
+}
+
+/**
+ * 读本章的任务点标签页。
+ *
+ * 返回空数组表示「这个课程页没有用标签页分页」——
+ * 老结构（多任务点并列在同一页）会走到这条回退路径，行为与改动前一致。
+ */
+export async function listJobTabs(page: Page): Promise<JobTab[]> {
+  for (const frame of page.frames()) {
+    try {
+      const tabs = await frame.evaluate(() => {
+        const ul = document.querySelector('ul.prev_ul');
+        if (!ul) return null;
+        return Array.from(ul.querySelectorAll('li')).map((li, i) => ({
+          index: i + 1,
+          label: (li.textContent || '').replace(/\s+/g, ' ').trim(),
+          active: li.className.indexOf('active') >= 0,
+        }));
+      });
+      if (tabs && tabs.length) return tabs as JobTab[];
+    } catch {
+      /* frame 可能正在导航，继续试下一个 */
+    }
+  }
+  return [];
+}
+
+/**
+ * 切到第 index 个任务点标签（1 起算），并等 cards frame 加载完。
+ *
+ * 优先直接调平台的 `changeDisplayContent`——它会同步改 iframe.src 与标签高亮，
+ * 比模拟点击可靠（点击可能被层叠元素挡住）。函数不存在时退化为点 li。
+ *
+ * 返回 false 表示切不过去（标签数已变、frame 导航中、用户切走了章节）。
+ */
+export async function activateJobTab(
+  page: Page,
+  h: EngineHooks,
+  index: number,
+  total: number
+): Promise<boolean> {
+  const deadline = Date.now() + 15000;
+
+  for (const frame of page.frames()) {
+    try {
+      const info = await frame.evaluate(
+        ({ idx, tot }) => {
+          const ul = document.querySelector('ul.prev_ul');
+          if (!ul) return null;
+          const items = Array.from(ul.querySelectorAll('li'));
+          if (idx < 1 || idx > items.length) return { ok: false as const, total: items.length };
+          const li = items[idx - 1];
+          const oc = li.getAttribute('onclick') || '';
+          const m = oc.match(
+            /changeDisplayContent\(\s*(\d+)\s*,\s*(\d+)\s*,\s*'([^']*)'\s*,\s*'([^']*)'\s*,\s*'([^']*)'/
+          );
+          if (m && typeof (window as unknown as Record<string, unknown>).changeDisplayContent === 'function') {
+            // 平台的标签切换函数。类型里没有这个全局，用 Record 取。
+            const fn = (window as unknown as Record<string, (...a: unknown[]) => void>)
+              .changeDisplayContent;
+            fn(Number(m[1]), Number(m[2]), m[3], m[4], m[5], '', '');
+            return { ok: true as const, total: items.length, via: 'changeDisplayContent' };
+          }
+          li.click();
+          return { ok: true as const, total: items.length, via: 'click' };
+        },
+        { idx: index, tot: total }
+      );
+      if (!info) continue; // 这个 frame 没有标签页，找下一个
+      if (!info.ok) return false;
+      if (info.total !== total) {
+        h.log(
+          'warn',
+          `    ⚠ 本章任务点标签数变了（原以为 ${total} 个，实际 ${info.total} 个）`
+        );
+      }
+
+      // 等 cards frame 换成对应 num 那一页
+      while (Date.now() < deadline) {
+        h.ctl.throwIfStopped();
+        const ready = await waitCardsNum(page, index - 1);
+        if (ready) {
+          h.log('info', `    → 已切到第 ${index} 个任务点（${info.via}）`);
+          return true;
+        }
+        await h.ctl.sleep(500);
+      }
+      h.log('warn', `    ⚠ 切到第 ${index} 个任务点后未等到内容加载`);
+      return false;
+    } catch (e: any) {
+      if (h.ctl.isStopped) throw e;
+    }
+  }
+  return false;
+}
+
+/**
+ * cards frame 的 src 是否已经对应第 num 个任务点。
+ *
+ * 读 src 里的 `num=` 参数，不猜也不等固定时长——平台切页是异步的，
+ * 早一步读到旧页就会把上一个任务点当成这一个，症状是「答题答到了别的任务点上」。
+ */
+async function waitCardsNum(page: Page, num: number): Promise<boolean> {
+  for (const frame of page.frames()) {
+    if (!frame.url().includes('knowledge/cards')) continue;
+    const m = frame.url().match(/[?&]num=(-?\d+)/);
+    if (m && Number(m[1]) === num) return true;
+  }
+  // 还没找到 cards frame：可能正在导航
+  return false;
 }
 
 /** 把类型翻成给用户看的短标签 */

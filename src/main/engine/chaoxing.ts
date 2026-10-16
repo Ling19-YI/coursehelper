@@ -584,6 +584,52 @@ export async function goBackToCourse(page: Page, h: EngineHooks): Promise<void> 
   }
 }
 
+/**
+ * 确保已经进入课程学习页（目录 frame 已就绪）。
+ *
+ * 幂等：已经在学习页（`studentcourse` frame 存在）时直接返回。
+ * 找不到「进入课程」按钮也不报错 —— 有些课程 URL 本身就是学习页地址。
+ *
+ * ⚠️ 直接访问 mooc2-ans/.../mycourse/stu 是**不可靠**的：实测那样打开时
+ * `studentcourse` 目录 frame 不会加载（读到 0 个 toOld），必须从课程详情页
+ * 点「进入课程」走完跳转。所以这里只点按钮，不自己拼学习页 URL。
+ */
+export async function ensureEnteredCourse(page: Page, h: EngineHooks): Promise<boolean> {
+  // ⚠️ 这里不能用 findChapterFrame 判断「是否已进来」：
+  // 它的兜底分支会返回 frames[1]，而课程详情页的 Vue frame 恰好就是 frames[1]，
+  // 于是永远判定「已进来」→ 永远不点「进入课程」→ 目录永远找不到。
+  // 判据必须是真出现了 studentcourse（或者页面已经是 mooc2-ans 学习页）。
+  const hasCatalog = () => page.frames().some(f => f.url().includes('studentcourse'));
+  const onStudyPage = () => /mooc2-ans\.chaoxing\.com\/mooc2-ans\/mycourse\/(stu|studentcourse)/.test(page.url());
+  if (hasCatalog() || onStudyPage()) return true;
+
+  for (const f of page.frames()) {
+    try {
+      const btn = f.locator('text=进入课程').first();
+      if (!(await btn.count())) continue;
+      if (!(await btn.isVisible().catch(() => false))) continue;
+      await btn.click({ force: true });
+      h.log('info', '   → 已点「进入课程」，等待学习页加载');
+      // 目录 frame 是跳转后异步加载的，等它出现而不是死等固定时长
+      const deadline = Date.now() + 25000;
+      while (Date.now() < deadline) {
+        h.ctl.throwIfStopped();
+        if (hasCatalog()) {
+          await h.ctl.sleep(2500);
+          return true;
+        }
+        await h.ctl.sleep(800);
+      }
+      h.log('warn', '   ⚠ 已点「进入课程」，但目录没有出现');
+      return false;
+    } catch (e: any) {
+      if (h.ctl.isStopped) throw e;
+    }
+  }
+  h.log('warn', '   ⚠ 课程页上没有「进入课程」按钮');
+  return false;
+}
+
 /** 进入课程并切换到章节页签，返回章节列表与平台侧任务点进度 */
 export async function openCourseChapters(
   page: Page,
@@ -592,6 +638,17 @@ export async function openCourseChapters(
 ): Promise<{ chapters: Chapter[]; platform: { done: number; total: number } | null }> {
   await page.goto(course.url, { timeout: 30000 });
   await h.ctl.sleep(5000);
+
+  // ── 必须先「进入课程」 ──
+  // 实测（2026-10-16）：课程详情页已经 Vue 化（course-ans-vue/88/detail.html），
+  // 那层 frame 里 `[onclick*="toOld"]` 是 **0 个** —— 目录根本不在详情页。
+  // 点「进入课程」才会跳到 mooc2-ans/mooc2-ans/mycourse/stu，由它再加载
+  // `mycourse/studentcourse` 目录 frame，那一层才有 40 个 toOld。
+  //
+  // 少了这一步的表现是「找到 0 个任务点 / 未找到章节」——不是超时，
+  // 是根本没找对地方，非常容易误判成课程没权限。
+  await ensureEnteredCourse(page, h);
+
   const tab = await page.$('text=章节');
   if (tab) {
     await tab.click({ force: true });
