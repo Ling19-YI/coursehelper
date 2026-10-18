@@ -673,6 +673,12 @@ export class ChaoxingEngine {
           }
           /** 当前轮到第几个标签页；0 表示还没开始遍历 */
           let tabIndex = 0;
+          /**
+           * 标签是否「全部走完且每个都确认已完成」。
+           * 刻意不拿 tabIndex 代替：tabIndex 走满也可能是「切过去发现有活」
+           * 然后 break 出来的，那一章还有没做完的任务点。
+           */
+          let tabsExhausted = false;
 
           for (;;) {
             if (++rounds > MAX_ROUNDS) {
@@ -702,14 +708,22 @@ export class ChaoxingEngine {
               // 这里按标签序号推进：一个标签处理完就跳下一个，直到全部扫完。
               // 旧结构（多任务点并列同页）jobTabs 为空，走下面原有的
               // activeJob / scroll2Job 分支，行为与改动前一致。
+              tabsExhausted = false;
               if (jobTabs.length > 1) {
                 // 逐个标签推进：一个标签没有未完成的任务点就跳下一个。
-                // ⚠️ 必须区分「全部标签都已完成」与「还有标签没看」——
-                //   前者是本章真的做完了，后者只是轮到这一个该做的事。
-                //   实测踩过的坑：把「跳过了已完成的任务点」当成「本章已完成」，
-                //   于是测验因答题设置关掉被跳过后，仍报「任务点已全部处理完毕」，
-                //   完成数虚增，用户以为做完了其实一题没做。
-                let allDone = false;
+                //
+                // ⚠️ 两个标志必须分开，混在一起会出「假成功」：
+                //   foundWork  = 这一轮找到了**还有活要干**的标签 → 该去处理它
+                //   exhausted  = 标签**全部走完且每个都已完成**
+                //
+                // 实测踩过的坑（改革开放史 2.3，视频已完成 + 测验未完成）：
+                //   切 tab1 → 视频已完成 → 跳下一个
+                //   切 tab2 → 测验未完成 → break
+                // 但 break 之后 tabIndex 已经等于标签总数，于是被误判成
+                // 「本章全完成」，日志说「此前已完成，无需重做」，还 markDone()
+                // 记了账 —— 结果那一章的测验**永远不会再被处理**。
+                let foundWork = false;
+                let exhausted = false;
                 while (tabIndex < jobTabs.length) {
                   const next = tabIndex + 1;
                   const switched = await activateJobTab(
@@ -720,21 +734,29 @@ export class ChaoxingEngine {
                   );
                   if (!switched) {
                     this.log('warn', `    ⚠ 无法切到第 ${next} 个任务点，跳过本章剩余任务点`);
+                    // 切不过去不等于做完了：剩下的标签状态未知，按「还有活」处理，
+                    // 交给后面的分派去试，而不是静默认定成功。
+                    foundWork = true;
+                    tabIndex = jobTabs.length;
                     break;
                   }
                   tabIndex = next;
                   // 切到的那一页里还有未完成的任务点吗？
                   const here = await activeJob(this.opts.page);
-                  if (here.total > 0 && here.finished < here.total) break;
+                  if (here.total > 0 && here.finished < here.total) {
+                    foundWork = true;
+                    break;
+                  }
                   this.log(
                     'info',
                     `    · 第 ${next} 个任务点（${jobTabs[next - 1].label}）已完成，跳下一个`
                   );
                 }
-                if (tabIndex >= jobTabs.length) {
-                  allDone = true;
+                if (!foundWork) {
+                  exhausted = true;
+                  tabsExhausted = true;
                 }
-                if (allDone) {
+                if (exhausted) {
                   if (markDone()) summary.completed++;
                   result = 'completed';
                   this.log('ok', '    ✓ 本章任务点已全部完成（此前已完成，无需重做）');
@@ -979,9 +1001,11 @@ export class ChaoxingEngine {
               }
               break;
             }
-            // 标签页已全部扫完：分页模型下再循环也是同一页打转。
+            // 标签已全部走完且确认每个都已完成：再循环也是同一页打转。
+            // ⚠️ 不能用 tabIndex 判定：tabIndex 走满也可能是因为「切过去发现有活」
+            //   然后 break 出来的（见上面 foundWork 的注释）。
             // 没有标签页的老结构不受影响，继续按 scroll2Job 往下走。
-            if (jobTabs.length > 1 && tabIndex >= jobTabs.length) {
+            if (jobTabs.length > 1 && tabsExhausted) {
               this.log('ok', '    ✓ 本章任务点已全部处理完毕');
               break;
             }
