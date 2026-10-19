@@ -454,6 +454,17 @@ GitCode 的 release 建完无法用 API 改，说明必须先写对。
     判据，不依赖帧类型识别）+ `waitTabFinished()`（等异步记账）
   - 课程页 Vue 化：`ensureEnteredCourse()` 自动点「进入课程」
   - 关于页：QQ 群 1128273483；收款码软件内与落地页两处同步（md5 校验）
+- **发布脚本的两个坑（2026-10-19 踩到，已修）**：
+  `scripts/local-release.mjs` / `local-gc-release.mjs` 在 **.gitignore 里**，
+  合规机检扫不到——它们里面写死的东西不会被任何检查拦住：
+  1. Release 标题曾硬编码 `刷课助手 CourseHelper ${TAG}`。改名后没人同步，
+     v2.1.3 首次发布时公开标题还是旧名，整轮合规整改差点白做。
+     现改为读 `package.json` 的 `productName`。
+  2. `TAG` 直接用 argv，传 `2.1.3` 就建出不带 v 的 tag，落地页
+     `/releases/tag/v2.1.3` 直接 404。现强制补 `v` 前缀。
+  3. `local-gc-release.mjs` 的 TAG 默认值原本写死 `v1.4.0`。
+  ⚠️ 教训：**gitignore 的脚本是合规盲区**，改品牌名时要手动 grep 一遍
+  `grep -rn "刷课" scripts/`，别只信机检。
 - **发布前必须知道的环境坑**：
   - 环境变量 `ELECTRON_RUN_AS_NODE=1` 会让 Electron 变成 Node 跑，
     报 `app.isPackaged` undefined。跑 Electron 前要 `env -u ELECTRON_RUN_AS_NODE`
