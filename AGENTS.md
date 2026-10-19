@@ -431,12 +431,35 @@ GitCode 的 release 建完无法用 API 改，说明必须先写对。
 
 ---
 
-## 九、当前状态（2026-10-15）
+## 九、当前状态（2026-10-19）
 
 - **最新发布：v2.1.2。v2.1.3 已改完、待发布**（发布说明唯一来源：
   `docs/v2.1.3发布说明.md`，两个发布脚本的内嵌 notes 由
-  `node scripts/sync-release-notes.mjs 2.1.3` 同步生成，当前逐字一致 494 字符）
-- **v2.1.3 是收尾版**：应用能力零增删，只做合规定位整改 + 一个用户反馈 bug。
+  `node scripts/sync-release-notes.mjs 2.1.3` 同步生成，当前逐字一致）
+- **v2.1.3 共 9 个提交、65 文件、+2923/−2174**：合规整改 + 4 个真机实测
+  抓出的引擎缺陷。**不是「零增删的收尾版」** —— 这句话已从发布说明删掉。
+- **真机验证已打通（2026-10-19）**：用 DeepSeek 开启答题跑完
+  「解析题目 → 作答 → 提交 → 平台标记完成 → 整章完成」，
+  同轮 5 个章节 completed；题干为超星字体替换时自动转截图识别 3/3。
+  ⚠️ 测试凭据在 `tools/keys/`（gitignore 双重忽略）：
+  `test-account.json`（账号）、`vision.json`（AI 通道）。
+- **本周踩到的 4 个「假成功」是同一类错误**（详见第十一、十二章）：
+  `jobUnfinishCount` 读不到→当成没活 / 测验 iframe 不在 DOM→当成不是测验 /
+  `tabIndex` 走满→当成全完成 / `foundWork` 为 false→当成全完成。
+  **修法共同点：不推断，只数「亲眼确认过的事实」。**
+- **chapters 已完成的能力清单**（相对 v2.1.2）：
+  - 章节内容分页：`listJobTabs()` / `activateJobTab()`（`ul.prev_ul` +
+    `changeDisplayContent`，等 cards frame 的 `num` 对上才返回）
+  - 完成判定：`doneTabs` 集合 + `currentJobPageDone()`（照平台 `checkJob()`
+    判据，不依赖帧类型识别）+ `waitTabFinished()`（等异步记账）
+  - 课程页 Vue 化：`ensureEnteredCourse()` 自动点「进入课程」
+  - 关于页：QQ 群 1128273483；收款码软件内与落地页两处同步（md5 校验）
+- **发布前必须知道的环境坑**：
+  - 环境变量 `ELECTRON_RUN_AS_NODE=1` 会让 Electron 变成 Node 跑，
+    报 `app.isPackaged` undefined。跑 Electron 前要 `env -u ELECTRON_RUN_AS_NODE`
+  - 无 GPU 环境要加 `ELECTRON_EXTRA_ARGS="--disable-gpu ..."`
+    （`dev.mjs` 与 `verify-ui.mjs` 都已支持透传）
+  - `verify-ui.mjs` 用 CDP 9333 驱动真实界面，比手点可靠，发布前跑它
   - **全仓库转中性**：`brand.ts` 不再有 `CH_BRAND` 开关（旧文案无法再被构建出来）。
     productName / 窗口标题 / `<title>` / 数据目录名 / 设置页 / 关于页 / 落地页 /
     README / 图标 / 功能截图全部改掉。见第五章「合规定位」。
