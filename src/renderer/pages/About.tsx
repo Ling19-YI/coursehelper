@@ -165,7 +165,7 @@ export default function About() {
           </Tag>
         </Space>
         <div className="muted" style={{ marginTop: 10 }}>
-          加群时请简单说明来意；群里不提供账号代刷，请勿询问此类问题。
+          加群时请简单说明来意；群里不提供账号代办类服务，请勿询问。
         </div>
       </div>
 
