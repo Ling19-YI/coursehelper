@@ -154,9 +154,24 @@ export default function About() {
         description="正式发布暂未购买代码签名证书，首次运行可能提示“已保护你的电脑”。点击「更多信息 → 仍要运行」即可，下载页会附带图文说明。"
       />
 
+      <div className="cardish">
+        <b>遇到问题？</b>
+        <div className="muted" style={{ margin: '6px 0 10px' }}>
+          使用中遇到问题、或者想反馈建议，欢迎加入 QQ 群。
+        </div>
+        <Space size="middle" wrap>
+          <Tag color="blue" style={{ fontSize: 14, padding: '4px 10px' }}>
+            QQ 群：1128273483
+          </Tag>
+        </Space>
+        <div className="muted" style={{ marginTop: 10 }}>
+          加群时请简单说明来意；群里不提供账号代刷，请勿询问此类问题。
+        </div>
+      </div>
+
       <div style={{ marginTop: 14 }}>
         <Typography.Text className="muted" type="secondary">
-          反馈问题或功能建议，欢迎在 GitHub 仓库提 Issue。
+          也可以在 GitHub 仓库提 Issue。
         </Typography.Text>
       </div>
     </div>

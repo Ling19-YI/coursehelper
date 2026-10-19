@@ -87,7 +87,7 @@ for (let i = 0; i < 40 && !ui; i++) {
 await page.screenshot({ path: path.join(root, 'app', 'ui-10-packaged.png') });
 console.log('[3] UI 概要:', JSON.stringify(ui.replace(/\n/g, ' | ').slice(0, 160)));
 
-if (!/开始刷课/.test(ui)) fail('UI 未加载到位: ' + ui);
+if (!/开始运行/.test(ui)) fail('UI 未加载到位: ' + ui);
 
 // 生产模式确认：页面是 file:// 且无 vite
 if (page.url().startsWith('http://localhost')) fail('走了 dev 模式?!');

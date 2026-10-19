@@ -84,7 +84,7 @@ shot('app-3-settings');
 
 // 4. 真实跑一门课 → 整窗（面板 + 学习通页面同时出现）
 await goto('任务');
-await page.locator('button:has-text("开始刷课")').click();
+await page.locator('button:has-text("开始运行")').click();
 console.log('started task, waiting for running...');
 let running = false;
 const states = [];

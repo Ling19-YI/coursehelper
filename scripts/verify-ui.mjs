@@ -32,7 +32,13 @@ const fail = msg => {
   process.exit(1);
 };
 
-child = spawn(electronExe, [mainJs], { stdio: ['ignore', 'pipe', 'pipe'] });
+// 允许透传额外的 Electron 开关（与 scripts/dev.mjs 保持一致）。
+// 无 GPU 的环境（CI / 远程桌面 / 沙箱）会 GPU process 反复崩，导致渲染进程
+// 起不来、loadFile 报 ERR_FAILED —— 那种情况要跑：
+//   ELECTRON_EXTRA_ARGS="--disable-gpu --disable-software-rasterizer --no-sandbox" node scripts/verify-ui.mjs
+const extraArgs = (process.env.ELECTRON_EXTRA_ARGS || '').split(/\s+/).filter(Boolean);
+if (extraArgs.length) console.log('[verify-ui] Electron 额外参数:', extraArgs.join(' '));
+child = spawn(electronExe, [...extraArgs, mainJs], { stdio: ['ignore', 'pipe', 'pipe'] });
 let log = '';
 child.stdout.on('data', d => (log += d.toString()));
 child.stderr.on('data', d => (log += d.toString()));
@@ -64,7 +70,7 @@ appPage.on('console', m => {
 
 // 首屏应直接进入任务页（免费版，无激活页）
 try {
-  await appPage.waitForSelector('text=开始刷课', { timeout: 25000 });
+  await appPage.waitForSelector('text=开始运行', { timeout: 25000 });
 } catch {
   const t = await appPage.evaluate(() => document.body.innerText);
   await appPage.screenshot({ path: path.join(shotDir, 'ui-2a-fail.png') });

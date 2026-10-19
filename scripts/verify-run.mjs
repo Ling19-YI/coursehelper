@@ -5,7 +5,7 @@ import * as path from 'node:path';
 
 /**
  * 真实任务运行验证（走完整 UI 路径）：
- *  启动 → 拉课程 → 勾选1门 → 开始刷课 → 等 running + 日志流动
+ *  启动 → 拉课程 → 勾选1门 → 开始运行 → 等 running + 日志流动
  *  → 视图页确认超星打开 → 停止 → 确认 stopped
  */
 const require = createRequire(import.meta.url);
@@ -80,8 +80,8 @@ await page.screenshot({ path: path.join(root, 'app', 'ui-6-selected.png') });
 // [3] 开始
 await page.getByText('任务', { exact: true }).click();
 await sleep(400);
-await page.locator('button:has-text("开始刷课")').click();
-console.log('[3] 已点击 开始刷课');
+await page.locator('button:has-text("开始运行")').click();
+console.log('[3] 已点击 开始运行');
 
 // [4] 等 running（含登录+导航，允许 90s）
 let st = null;
