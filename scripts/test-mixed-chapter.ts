@@ -195,24 +195,33 @@ check(
     + '「已切到第 2 个任务点、还没做完」也会被当成本章处理完了'
 );
 check(
-  '「全完成」用独立标志，不拿 tabIndex 代替',
-  // ⚠️ 这条是被真机实测逼出来的：改革开放史 2.3（视频已完成 + 测验未完成）
-  // 切 tab1 → 视频已完成 → 跳下一个 → 切 tab2 → 测验未完成 → break。
-  // 但此时 tabIndex 已经等于标签总数，被误判成「本章全完成」，
-  // markDone() 记了账 → 那一章的测验**永远不会再被处理**。
-  // 必须用 foundWork（这轮找到了活）区分，不能看 tabIndex。
-  /let foundWork = false;/.test(index) && /if \(!foundWork\)\s*\{\s*\n\s*exhausted = true;\s*\n\s*tabsExhausted = true;/.test(index),
-  'tabIndex 走满 ≠ 做完了；「切过去发现有活然后 break」也是走满'
+  '用「已确认完成的标签集合」判定本章完成，不用任何推断标志',
+  // ⚠️ 这条被真机实测连打两次脸：
+  //   ① 改革开放史 2.3：切到最后一个标签发现有活 → break 时 tabIndex 已走满
+  //      → 被 `tabIndex >= jobTabs.length` 误判成「全完成」→ markDone() 记账
+  //      → 那一章的测验永远不会再被处理。
+  //   ② 中华民族共同体概论 1.2：第二轮进来 tabIndex 已是最后一个，while 一次
+  //      不进 → 「本轮没找到活」恒为 true → 又误判完成，日志还自相矛盾：
+  //      「本章还有 2 个任务点未完成」紧跟「已全部完成」。
+  // 唯一可靠的判据是「每个标签都被亲眼确认过完成」。
+  /const doneTabs = new Set<number>\(\)/.test(index) &&
+    /if \(doneTabs\.size >= jobTabs\.length\)/.test(index),
+  '必须有 doneTabs；任何基于 tabIndex / foundWork 的完成推断都会假成功'
 );
 check(
-  '切不过去时按「还有活」处理，不静默认定成功',
-  /无法切到第 \$\{next\} 个任务点[\s\S]{0,200}?foundWork = true;/.test(index),
-  '切换失败时状态未知，应交给分派去试而不是标记成功'
+  '确认完成的标签才记进 doneTabs',
+  /here\.finished >= here\.total\)\s*\{\s*\n\s*doneTabs\.add\(next\);/.test(index),
+  '没确认完成就记账 → 完成度虚高'
 );
 check(
-  '标签页确实走完且都完成时才停止循环',
-  /if \(jobTabs\.length > 1 && tabsExhausted\)/.test(index),
-  '标签页用尽后仍在同一页空转'
+  '切不过去的标签不记进 doneTabs（状态未知）',
+  /无法切到第 \$\{next\} 个任务点[\s\S]{0,240}?tabIndex = jobTabs\.length;\s*\n\s*break;/.test(index),
+  '切换失败却当成完成，剩下的任务点再也没人管'
+);
+check(
+  '无新标签可切但仍有未完成的，如实报「未能推进」而不是报完成',
+  /还有 \$\{jobTabs\.length - doneTabs\.size\} 个任务点未完成/.test(index),
+  '推不动时静默报完成 = 用户以为刷完了，其实一题没做'
 );
 
 console.log('\n[实测发现：章节内容由 ul.prev_ul 分页渲染，一次只有当前那个任务点]');
