@@ -429,6 +429,13 @@ export async function activateJobTab(
         h.ctl.throwIfStopped();
         const ready = await waitCardsNum(page, index - 1);
         if (ready) {
+          // ⚠️ num 对上只代表 iframe 地址换了，卡片内容（含
+          // `ans-job-finished` 完成标记）还在渲染。实测（2026-10-19）：
+          // 立刻读会把「已完成的测验」读成「任务点未完成」，
+          // 于是引擎以为还要答一次，冲进答题页又找不到提交按钮
+          // （因为早就交过了），白耗一轮还报「答题未完成」。
+          // 这里给一小段沉降时间，让完成标记落定。
+          await h.ctl.sleep(1200);
           h.log('info', `    → 已切到第 ${index} 个任务点（${info.via}）`);
           return true;
         }
@@ -456,6 +463,72 @@ async function waitCardsNum(page: Page, num: number): Promise<boolean> {
     if (m && Number(m[1]) === num) return true;
   }
   // 还没找到 cards frame：可能正在导航
+  return false;
+}
+
+/**
+ * 当前这一页的任务点是否已被平台标记完成（**不依赖 iframe 类型识别**）。
+ *
+ * ── 为什么不能只用 activeJob ──
+ * 实测（2026-10-19，中华民族共同体概论 1.1 的测验页）：
+ *   容器 class = "ans-attach-ct ans-job-finished"
+ *   图标 aria  = "任务点已完成"
+ *   但 collectJobFrames 报 finished=false —— 祖先链在某些卡片结构上
+ *   没接上（iframe 的 frameElement 与 .ans-attach-ct 的嵌套关系不一致），
+ *   于是引擎误判成「还没做」，冲进已经交过的答题页找提交按钮，
+ *   白耗一轮还报「答题未完成」。
+ *
+ * 这里改为直接问平台自己的判据 —— 它内置的 checkJob() 就是：
+ *   数 .ans-job-icon 里有没有「父容器不带 ans-job-finished」的。
+ * 只要这一页有任务点、且全都带完成标记，就算完成。
+ *
+ * 返回 null 表示这一页没有可识别的卡片（不确定，交给调用方决定）。
+ */
+export async function currentJobPageDone(page: Page): Promise<boolean | null> {
+  for (const frame of page.frames()) {
+    if (!frame.url().includes('knowledge/cards')) continue;
+    try {
+      const r = await frame.evaluate(() => {
+        const cards = Array.from(document.querySelectorAll('.ans-attach-ct')).filter(c =>
+          c.querySelector('.ans-job-icon')
+        );
+        if (!cards.length) return null;
+        return cards.every(c => String((c as HTMLElement).className).indexOf('ans-job-finished') >= 0);
+      });
+      if (r !== null) return r;
+    } catch {
+      /* frame 正在导航，试下一个 */
+    }
+  }
+  return null;
+}
+
+/**
+ * 提交后等平台把**当前这一页**标记完成（异步记账）。
+ *
+ * ── 为什么必须等 ──
+ * 实测（2026-10-19，中华民族共同体概论 1.1）：
+ *   提交测验成功 → 立刻读 → aria="任务点未完成"
+ *   隔一会儿再读 → aria="任务点已完成"，目录里那一章也变成「已完成」
+ * 平台是异步写这个标记的。读太早会把「已经做成了」误判成「没做成」，
+ * 于是多跑一轮、日志也说错话。
+ *
+ * 与 waitUnfinishDrop 的区别：那个等的是**章节级计数**下降，
+ * 这个等的是**当前任务点的完成标记**出现。分页模型下只有后者可用。
+ */
+export async function waitTabFinished(page: Page, h: EngineHooks): Promise<boolean> {
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    h.ctl.throwIfStopped();
+    // 先用平台自己的标记判（不受类型识别影响），判不出来再退回 activeJob
+    const direct = await currentJobPageDone(page);
+    if (direct === true) return true;
+    if (direct === null) {
+      const here = await activeJob(page);
+      if (here.total > 0 && here.finished >= here.total) return true;
+    }
+    await h.ctl.sleep(700);
+  }
   return false;
 }
 

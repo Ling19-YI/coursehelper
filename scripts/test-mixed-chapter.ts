@@ -210,8 +210,17 @@ check(
 );
 check(
   '确认完成的标签才记进 doneTabs',
-  /here\.finished >= here\.total\)\s*\{\s*\n\s*doneTabs\.add\(next\);/.test(index),
+  /if \(finishedNow\)\s*\{\s*\n\s*doneTabs\.add\(next\);/.test(index) &&
+    /const finishedNow =\s*\n?\s*pageDone !== null/.test(index),
   '没确认完成就记账 → 完成度虚高'
+);
+check(
+  '完成判定优先用平台标记（currentJobPageDone），必要时才退回 activeJob',
+  // 实测：测验卡片的 iframe 祖先链接不上 .ans-attach-ct，activeJob 会把
+  // 「已交过的测验」读成 finished=false，于是冲进去又找不到提交按钮。
+  // 平台自己的判据（.ans-attach-ct 有没有 ans-job-finished）更可靠。
+  /currentJobPageDone/.test(index) && /pageDone !== null/.test(index),
+  '只靠帧识别判完成，会反复重做已完成的测验'
 );
 check(
   '切不过去的标签不记进 doneTabs（状态未知）',

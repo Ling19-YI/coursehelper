@@ -34,6 +34,8 @@ import {
   describeJobInventory,
   listJobTabs,
   activateJobTab,
+  waitTabFinished,
+  currentJobPageDone,
 } from './jobpoint';
 import { TikuStore } from './tiku';
 import {
@@ -745,8 +747,19 @@ export class ChaoxingEngine {
                   }
                   tabIndex = next;
                   // 切到的那一页里还有未完成的任务点吗？
-                  const here = await activeJob(this.opts.page);
-                  if (here.total > 0 && here.finished >= here.total) {
+                  //
+                  // ⚠️ 先用平台自己的完成标记判（currentJobPageDone），
+                  // 仅当它判不出来时才退回 activeJob 的帧识别 ——
+                  // 实测测验卡片的 iframe 祖先链有时接不上 .ans-attach-ct，
+                  // 于是 activeJob 报 finished=false，把「已交过的测验」
+                  // 当成「还要再做」，冲进去又找不到提交按钮，白耗一轮。
+                  const pageDone = await currentJobPageDone(this.opts.page);
+                  const here = pageDone === null ? await activeJob(this.opts.page) : null;
+                  const finishedNow =
+                    pageDone !== null
+                      ? pageDone
+                      : here !== null && here.total > 0 && here.finished >= here.total;
+                  if (finishedNow) {
                     doneTabs.add(next);
                     this.log(
                       'info',
@@ -863,9 +876,40 @@ export class ChaoxingEngine {
                   }
                 );
                 if (qr.success) {
-                  if (markDone()) summary.completed++;
                   result = 'quiz_ok';
                   this.log('ok', `    ✓ 答题完成 (${qr.answered} 题)`);
+
+                  if (jobTabs.length > 1) {
+                    // ── 分页章节：答完必须回头确认平台有没有把这一页标记完成 ──
+                    //
+                    // 实测（2026-10-19，中华民族共同体概论 1.1/1.2）：
+                    // 提交成功、日志也说了「答题完成」，但平台未必立刻打上
+                    // ans-job-finished —— 1.2 那次平台回的是「我的答案 BCD
+                    // 33.3分」，分数不够时不会记完成。
+                    //
+                    // ⚠️ 而且平台**异步记账**：实测提交后立刻读，读到的还是
+                    // 「任务点未完成」；隔一轮再看就是「任务点已完成」，
+                    // 章节在目录里也变成了「已完成」。读太早会误判成没做成，
+                    // 白白多跑一轮。所以这里要轮询等一会儿。
+                    const now = await waitTabFinished(this.opts.page, this.hooks);
+                    if (now) {
+                      doneTabs.add(tabIndex);
+                      this.log('info', `    · 平台已把第 ${tabIndex} 个任务点标记完成`);
+                    } else {
+                      this.log(
+                        'warn',
+                        `    ⚠ 平台尚未把第 ${tabIndex} 个任务点标记完成（可能分数不足），下次继续`
+                      );
+                    }
+                    if (doneTabs.size >= jobTabs.length) {
+                      if (markDone()) summary.completed++;
+                      result = 'completed';
+                      this.log('ok', '    ✓ 本章任务点已全部完成');
+                    }
+                  } else if (markDone()) {
+                    // 老结构（非分页）：本章就是一个任务点，答完即完成
+                    summary.completed++;
+                  }
                 } else {
                   summary.skipped++;
                   result = 'quiz_skip';
