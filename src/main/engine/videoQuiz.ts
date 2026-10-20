@@ -139,6 +139,144 @@ export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
   return { present: false, frame: null, question: null, feedback: 'open', optionCount: 0 };
 }
 
+/**
+ * 「答完之后那个按钮」的文案。
+ *
+ * ⚠️ 为什么按文案而不是按 id：超星的弹窗有好几套皮肤，id 互不相同
+ * （本项目原先只认随堂弹题的 `#videoquiz-continue`）。用户实测（2026-10-20，
+ * 人工智能基础 2.2 章节测验）遇到的是另一套：答对后底部出现绿色
+ * 「恭喜你，答对了！」，右边一枚蓝色 **「继续学习」** 按钮，点了才收尾。
+ * 而同门课另一些弹窗答完是**自动收尾**的，不需要点。
+ *
+ * 所以这里不能认死 id，也不能「一律点一下」——自动收尾的那套点了也没这个元素，
+ * 自然落空；而有按钮的那套不点，弹窗就一直盖在页面上，
+ * 引擎后续的点击全部被它挡住（用户看到的现象就是「卡住不动」）。
+ *
+ * 匹配策略：先按 id 精确命中（老的那套，行为不变），再退到「可见浮层里
+ * 文本为继续/继续学习 的可点元素」。限定在**浮层内**且**文本短**，
+ * 避免误点课程正文里的「继续」字样。
+ */
+const CONTINUE_TEXTS = ['继续学习', '继续下一节', '继续'];
+const CONTINUE_IDS = [
+  '#videoquiz-continue',
+  '#continueLearn',
+  '#btnContinue',
+  '#nextLearn',
+];
+
+/** 可点元素（覆盖超星各种按钮写法） */
+const CLICKABLE_SEL =
+  'a,button,input[type=submit],input[type=button],[onclick],[role=button],[class*=btn],[class*=Btn],[id*=btn],[id*=Btn]';
+
+/** 浮层容器：脱离文档流且面积够大，才可能在里面找「继续」 */
+const OVERLAY_SEL = [
+  '.tkTopic',
+  '.ans-videoquiz',
+  '.layui-layer',
+  '.layui-dialog',
+  '#workpop',
+  '#divVideoQuestion',
+  '#divExamWork',
+  '[role="dialog"]',
+  '.modal',
+  '.popup',
+  '.dialog',
+  '.popDiv',
+  '.maskDiv',
+].join(',');
+
+/**
+ * 在页面上找到并点掉「继续 / 继续学习」按钮。
+ *
+ * 返回点到了什么，没找到返回 null。
+ *
+ * ⚠️ 只在**可见浮层内**找。超星正文里出现「继续」二字的概率不低
+ * （章节标题、题目解析都可能带），放开限定就会点飞。
+ */
+export async function clickContinueIfPresent(
+  page: Page,
+  timeoutMs = 2500
+): Promise<{ by: string; text: string } | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const frame of page.frames()) {
+      // 1) 精确 id（老的那套随堂弹题）
+      for (const id of CONTINUE_IDS) {
+        const el = frame.locator(id).first();
+        if (!(await el.count().catch(() => 0))) continue;
+        if (!(await el.isVisible().catch(() => false))) continue;
+        await el.click({ force: true, timeout: 2000 }).catch(() => {});
+        return { by: id, text: '继续' };
+      }
+
+      // 2) 可见浮层内按文案找
+      let hit: { text: string; idx: number } | null = null;
+      try {
+        hit = await frame.evaluate(
+          ({ overlaySel, clickSel, texts }: { overlaySel: string; clickSel: string; texts: string[] }) => {
+            const visible = (el: Element | null): boolean => {
+              if (!el) return false;
+              const cs = getComputedStyle(el);
+              if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 6 && r.height > 6;
+            };
+            const overlays: Element[] = [];
+            for (const sel of overlaySel.split(',')) {
+              let els: Element[] = [];
+              try {
+                els = Array.from(document.querySelectorAll(sel));
+              } catch {
+                continue;
+              }
+              for (const el of els) if (visible(el)) overlays.push(el);
+            }
+            // 浮层不在预设容器里也不漏判：任何脱离文档流、面积够大的可见块都算
+            if (!overlays.length) {
+              for (const el of Array.from(document.querySelectorAll('div,section,dialog'))) {
+                if (!visible(el)) continue;
+                const cs = getComputedStyle(el);
+                if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
+                const r = el.getBoundingClientRect();
+                if (r.width * r.height < 8000) continue;
+                overlays.push(el);
+              }
+            }
+            for (const ov of overlays) {
+              let cands: Element[] = [];
+              try {
+                cands = Array.from(ov.querySelectorAll(clickSel));
+              } catch {
+                continue;
+              }
+              for (const c of cands) {
+                if (!visible(c)) continue;
+                const t = (c.textContent || (c as HTMLInputElement).value || '').replace(/\s+/g, ' ').trim();
+                // 文本必须**恰好**是「继续」这类短文案；长句是正文/标题，不是按钮
+                if (!t || t.length > 8) continue;
+                if (!texts.some(x => t === x || t.replace(/^[>＞\s]+|[<＜\s]+$/g, '') === x)) continue;
+                return { text: t, idx: overlays.indexOf(ov) };
+              }
+            }
+            return null;
+          },
+          { overlaySel: OVERLAY_SEL, clickSel: CLICKABLE_SEL, texts: CONTINUE_TEXTS }
+        );
+      } catch {
+        hit = null;
+      }
+      if (hit) {
+        // 按文本再定位一次并点：evaluate 只回报了文案，不回报句柄
+        const locator = frame.getByText(new RegExp(`^\\s*${hit!.text}\\s*$`)).last();
+        await locator.click({ force: true, timeout: 2000 }).catch(() => {});
+        return { by: '文案匹配', text: hit!.text };
+      }
+    }
+    await new Promise(r => setTimeout(r, 400));
+  }
+  return null;
+}
+
 async function waitFeedback(
   page: Page,
   h: EngineHooks,
@@ -178,7 +316,7 @@ export async function answerVideoPopup(
   h: EngineHooks,
   channel: AnswerChannel | null,
   opts: { tiku?: TikuStore | null; submitCoverRate?: number; submitTimeout?: number }
-): Promise<{ answered: number; submitted: number; retried: number } | null> {
+): Promise<{ answered: number; submitted: number; retried: number; closed: 'auto' | 'clicked' | 'none' } | null> {
   const first = await readVideoPopup(page);
   if (!first.present || !first.question || !first.frame) return null;
 
@@ -186,7 +324,7 @@ export async function answerVideoPopup(
   const q = first.question;
   h.log('info', `    → 随堂弹题（${q.options.length} 个选项，${q.type}）: ${q.stem.slice(0, 40)}`);
 
-  if (q.options.length < 2) return { answered: 0, submitted: 0, retried: 0 };
+  if (q.options.length < 2) return { answered: 0, submitted: 0, retried: 0, closed: 'none' };
 
   // 答
   const chain: Searcher[] = [];
@@ -199,7 +337,7 @@ export async function answerVideoPopup(
   }
   if (!answer) {
     h.log('warn', '    ⚠ 弹题没有答案，放弃（不乱点）');
-    return { answered: 0, submitted: 0, retried: 0 };
+    return { answered: 0, submitted: 0, retried: 0, closed: 'none' };
   }
   h.log('info', `    → 弹题答案: ${answer}`);
 
@@ -219,7 +357,7 @@ export async function answerVideoPopup(
   }
   if (!clicked) {
     h.log('warn', '    ⚠ 弹题选项没点上');
-    return { answered: 0, submitted: 0, retried: 0 };
+    return { answered: 0, submitted: 0, retried: 0, closed: 'none' };
   }
 
   // 提交
@@ -227,7 +365,7 @@ export async function answerVideoPopup(
     await first.frame!.locator('#videoquiz-submit').first().click({ force: true, timeout: 3000 });
   } catch (e: any) {
     h.log('warn', `    ⚠ 弹题提交失败: ${String(e.message).slice(0, 60)}`);
-    return { answered: clicked, submitted: 0, retried: 0 };
+    return { answered: clicked, submitted: 0, retried: 0, closed: 'none' };
   }
 
   let w = await waitFeedback(page, h, { submitTimeout });
@@ -255,7 +393,7 @@ export async function answerVideoPopup(
       const switched = alt !== alt2;
       if (!switched) {
         h.log('warn', '    ⚠ 改选未生效，停止（不再提交）');
-        return { answered: clicked, submitted: 0, retried };
+        return { answered: clicked, submitted: 0, retried, closed: 'none' };
       }
       await first.frame!.locator('#videoquiz-submit').first().click({ force: true, timeout: 3000 }).catch(() => {});
       w = await waitFeedback(page, h, { submitTimeout });
@@ -267,19 +405,62 @@ export async function answerVideoPopup(
     }
   }
 
-  // 关弹题：出现「继续」就点一次
-  const cur = await readVideoPopup(page);
-  if (cur.feedback === 'continue' || cur.present) {
-    for (const f of page.frames()) {
-      try {
-        const btn = f.locator('#videoquiz-continue');
-        if (await btn.count()) {
-          await btn.first().click({ force: true, timeout: 2500 }).catch(() => {});
-          h.log('ok', '    ✓ 已关闭弹题，继续播放');
-          break;
-        }
-      } catch {}
+  // ── 收尾：弹窗有两种走向，都要能退场 ──────────────────────────────
+  //
+  // 用户实测（2026-10-20，人工智能基础 2.2）：这类弹窗答对后**不会自动收起**，
+  // 底部留下一枚「继续学习」按钮，必须点掉弹窗才退场。
+  // 而同门课另一些弹窗答完直接自动收起（基础英语读写 3.2 实测）。
+  //
+  // 所以不能只认 #videoquiz-continue（旧实现就栽在这）：
+  //   自动收尾的那套 → 等一小会儿弹窗自己没了 → 什么都不用点
+  //   有按钮的那套   → 点「继续学习」
+  // 两条路都要走，先等自动、再找按钮。
+  const closed = await settlePopup(page, h, { reason: '随堂弹题' });
+  return { answered: clicked, submitted, retried, closed };
+}
+
+/**
+ * 弹窗收尾：先给平台自动收起的机会，再找「继续」按钮点掉。
+ *
+ * 返回 'auto'（弹窗自己退了）/ 'clicked'（点掉了）/ 'none'（本来就没弹窗）。
+ *
+ * 抽成独立函数是因为「章节测验提交后」也要走同一套逻辑 —— 实测 2.3 提交成功后
+ * 页面停在「查看已批阅作业」不退，引擎没有任何收尾动作，只能干等。
+ */
+export async function settlePopup(
+  page: Page,
+  h: EngineHooks | null,
+  opts: { reason: string; autoWaitMs?: number; probe?: () => Promise<boolean> }
+): Promise<'auto' | 'clicked' | 'none'> {
+  const autoWaitMs = opts.autoWaitMs ?? 2500;
+  const probe = opts.probe ?? (async () => (await readVideoPopup(page)).present);
+  const log = (lv: 'ok' | 'info' | 'warn', msg: string) => h?.log(lv, msg);
+
+  // 第1 步：等平台自动收起
+  const deadline = Date.now() + autoWaitMs;
+  let present = true;
+  while (Date.now() < deadline) {
+    present = await probe().catch(() => false);
+    if (!present) {
+      log('ok', `✓ ${opts.reason}已自动收起`);
+      return 'auto';
     }
+    await new Promise(r => setTimeout(r, 400));
   }
-  return { answered: clicked, submitted, retried };
+
+  // 第 2 步：还在 → 找「继续 / 继续学习」点掉
+  const hit = await clickContinueIfPresent(page);
+  if (hit) {
+    log('ok', `✓ 已点击「${hit.text}」，${opts.reason}收尾（方式：${hit.by}）`);
+    // 点完再确认一次：点到了不一定真收尾了
+    for (let i = 0; i < 8; i++) {
+      if (!(await probe().catch(() => false))) return 'clicked';
+      await new Promise(r => setTimeout(r, 400));
+    }
+    log('warn', `⚠ 已点「${hit.text}」但${opts.reason}仍在，可能需要人工确认`);
+    return 'clicked';
+  }
+
+  log('info', `· ${opts.reason}没有出现「继续」按钮，按自动收起处理`);
+  return 'none';
 }

@@ -5,6 +5,7 @@ import { CacheSearcher, LlmSearcher, resolveAnswers, type Searcher } from './sea
 import { VisionSearcher } from './visionSearcher';
 import type { TikuStore } from './tiku';
 import { activeJob, jobFrameFinished, hasUnfinishedVideoJob } from './jobpoint';
+import { settlePopup } from './videoQuiz';
 
 export type { QType, QuizOption, QuizQuestion, AnswerChannel } from './quizTypes';
 
@@ -956,6 +957,30 @@ export async function handleQuiz(
 
   const success =
     answered > 0 && (await submitQuizIn(page, frame, undefined, h, '\u5df2\u63d0\u4ea4\u7ae0\u8282\u4f5c\u4e1a'));
+
+  // ── 交卷后的收尾：把可能残留的弹层退场 ─────────────────────────
+  //
+  // 真机实测（2026-10-20，人工智能基础 2.3，交卷 100 分）：
+  // 交卷成功后测验 iframe 跳到「查看已批阅作业」（selectWorkQuestionYiPiYue）
+  // 并**停在那里不退**，既不自动回到任务点列表，也不自动跳下一节。
+  // 不点掉残留弹层，它就一直盖着页面，引擎后续的点击全被挡住——
+  // 用户看到的现象就是「答完了却不动」。
+  //
+  // 另有一路（用户 2.2 实测截图）：弹窗式测验答对后底部出现绿色
+  // 「恭喜你，答对了！」+ 蓝色「继续学习」，同样要点掉。
+  // 而同门课另一些弹窗交卷后自动收起，什么都不用点。
+  //
+  // 三种走向都可能，所以统一交给 settlePopup：先等自动收，没收再找按钮点。
+  // 且必须在判断「本章是否完成」**之前**做——弹层挡着时平台的任务点完成
+  // 标记可能还没落下来，会被误判成「没做完」，于是反复重跑这一章。
+  if (success) {
+    await settlePopup(page, h, {
+      reason: '\u4ea4\u5377\u7ed3\u679c\u5f39\u5c42',
+      autoWaitMs: 3000,
+      probe: async () => (await findQuizPopup(page)) !== null,
+    });
+  }
+
   if (!answered) h.log('warn', '    \u26a0 \u4e00\u9898\u672a\u70b9\u5230');
   return { answered, success, coverage: answeredRatio };
 }

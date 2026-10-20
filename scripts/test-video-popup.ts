@@ -69,5 +69,61 @@ check(
 check('answerPopup 默认 false', /answerPopup:\s*false/.test(types));
 check('存在总开关 agentEnabled 门控', /agentEnabled:\s*\(\)\s*=>/.test(index));
 
+// ---- 4. 弹窗收尾：两种走向都要能退场 ----
+//
+// 用户实测（2026-10-20，人工智能基础）：
+//   · 2.2 章节测验：答对后底部出现绿色「恭喜你，答对了！」+ 蓝色「继续学习」，
+//     不点它弹窗就一直盖着页面，引擎后续点击全被挡住 → 「答完了却不动」
+//   · 同门课另一些弹窗答完自动收起，不需要点
+// 旧实现只认 #videoquiz-continue 一个 id，另一种皮肤完全处理不到。
+const vq = read('videoQuiz.ts');
+const quiz = read('quiz.ts');
+
+check(
+  '「继续学习」在文案表里（不只认 #videoquiz-continue）',
+  /继续学习/.test(vq),
+  '只按 id 匹配，遇到另一种弹窗皮肤就漏判'
+);
+check(
+  '继续按钮候选是id 列表，含旧的 #videoquiz-continue',
+  /CONTINUE_IDS[\s\S]{0,300}#videoquiz-continue/.test(vq),
+  '缺少多 id 兜底'
+);
+check(
+  '存在统一收尾函数 settlePopup',
+  /export async function settlePopup/.test(vq),
+  '弹窗收尾没有统一入口，随堂弹题与交卷后各写一套'
+);
+check(
+  'settlePopup 先等平台自动收起再找按钮',
+  /autoWaitMs/.test(vq) && /clickContinueIfPresent/.test(vq),
+  '必须两条路都走：自动收 + 手动点'
+);
+check(
+  '随堂弹题答题末尾调用了收尾',
+  /settlePopup\(page,\s*h,\s*\{\s*reason:/.test(vq),
+  '答完没收尾，弹窗残留'
+);
+check(
+  '章节测验交卷后也调用了收尾',
+  /settlePopup\(page,\s*h,\s*\{/.test(quiz),
+  '交卷后弹层残留会挡住页面'
+);
+check(
+  '继续按钮只在可见浮层内找（防误点正文）',
+  /OVERLAY_SEL/.test(vq) && /position !== 'fixed'/.test(vq),
+  '放开限定会点到课程正文里的「继续」字样'
+);
+check(
+  '继续按钮要求文本短（长句是正文不是按钮）',
+  /t\.length > 8/.test(vq),
+  '缺少长度约束'
+);
+check(
+  '没点成也不算成功：点完要复检弹层是否真退了',
+  /可能需要人工确认|点了.*仍在/.test(vq),
+  '点到按钮≠ 弹窗收起，必须复检'
+);
+
 console.log(failed ? `\n${failed} 项未通过` : '\n全部通过');
 process.exit(failed ? 1 : 0);
