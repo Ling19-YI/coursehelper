@@ -22,6 +22,7 @@ import type { TikuStore } from './tiku';
 export type VideoPopupFeedback = 'open' | 'submitting' | 'correct' | 'incorrect' | 'continue';
 
 const OPT_SEL = 'li.ans-videoquiz-opt';
+const SUBMIT_SEL = '#videoquiz-submit';
 
 export interface VideoPopupState {
   present: boolean;
@@ -29,6 +30,9 @@ export interface VideoPopupState {
   frame: Frame | null;
   question: QuizQuestion | null;
   feedback: VideoPopupFeedback;
+  /** 提交按钮当前是否可见。超星提交后会把 submit 置为 display:none，
+   *  此时弹题还在（等「继续学习」点掉），但已经不能也不该再提交一次。 */
+  submitVisible: boolean;
   /** 选项数，2 时才允许自动改选 */
   optionCount: number;
 }
@@ -43,39 +47,174 @@ const VISIBLE_FN = `(el) => {
   return !!(el.offsetParent || st.position === 'fixed' || st.position === 'absolute');
 }`;
 
+/**
+ * ⚠️ 下面几个 helper 必须以**字符串**形式传进 evaluate，不能写成
+ * `const q = (e) => ...` 这样的具名箭头函数。
+ *
+ * 原因：evaluate 是把函数**序列化成字符串**发到浏览器执行的，而
+ * tsx/esbuild（keepNames）会给具名函数注入 `__name(fn, "fn")` 包装，
+ * 浏览器侧没有 __name 这个符号 → 整个 evaluate 抛
+ * `ReferenceError: __name is not defined`。
+ * 更糟的是外层 catch {} 会把它吞掉，表现为「这个检测功能整体失效」，
+ * 日志里毫无痕迹。生产构建没开 keepNames（线上一直正常），但用 tsx
+ * 跑的真机/DOM 测试会全红 —— 于是同一份代码在两种环境里行为不同。
+ *
+ * 这个坑项目里已经踩过一次，见 src/main/engine/quiz.ts 顶部注释
+ * 与 scripts/test-evaluate-safety.ts。
+ */
+const Q_FN = `(e) => (e ? (e.textContent || '').replace(/\\s+/g, ' ').trim() : '')`;
+
+/** 「可点元素」用的宽松可见性：面积够大即可，不看 offsetParent */
+const VISIBLE_LOOSE_FN = `(el) => {
+  if (!el) return false;
+  const cs = getComputedStyle(el);
+  if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 6 && r.height > 6;
+}`;
+
+
 /** 读当前弹题状态。不存在弹题时 present=false。 */
 export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
   for (const frame of page.frames()) {
     let st: any;
     try {
       st = await frame.evaluate(
-        ({ visibleSrc, optSel }) => {
+        ({ visibleSrc, qSrc, optSel, submitSel }) => {
+          // ⚠️ 这几个 helper 必须用 eval 从字符串取，不能写成
+          // `const q = (e) => ...`：打包器（tsx/esbuild 的 keepNames）会给
+          // 具名函数注入 `__name(fn, "fn")` 包装，而 evaluate 是把函数
+          // **序列化成字符串**发到浏览器执行的，浏览器侧没有 __name →
+          // ReferenceError: __name is not defined。
+          // 外层 catch {} 会把它吞掉，表现为「这个检测整体失效」，日志毫无痕迹。
+          // 这个坑项目里已踩过一次，见 src/main/engine/quiz.ts 顶部注释。
           const visible = eval(visibleSrc) as (el: Element | null) => boolean;
-          const submit = document.querySelector('#videoquiz-submit');
-          if (!visible(submit)) return null;
-          const root = (submit as Element).closest('.tkTopic');
+          const q = eval(qSrc) as (e: Element | null) => string;
+
+          const submit = document.querySelector(submitSel);
+          const submitVisible = visible(submit);
+
+          // ⚠️ 弹题「存在」不能只看提交按钮可见。
+          // 超星 InteractiveQuiz（视频互动测验）提交后会把 #videoquiz-submit
+          // 置为 display:none，同时显示 #videoquiz-continue —— 弹题**还在**，
+          // 要等玩家点「继续学习」才收尾。若按旧逻辑（submit 不可见就认为
+          // 弹题没了），引擎会以为弹题已自动收起，从而永远不去点那个按钮，
+          // 弹层就一直盖在页面上挡住后续点击（用户看到的「答完却不动」）。
+          const roots: Element[] = [];
+          const r1 = (submit as Element | null)?.closest?.('.tkTopic') ?? null;
+          if (r1 && roots.indexOf(r1) < 0) roots.push(r1);
+          const r2 = document.querySelector('#videoquiz-continue')?.closest('.tkTopic') ?? null;
+          if (r2 && roots.indexOf(r2) < 0) roots.push(r2);
+          for (const el of Array.from(document.querySelectorAll('.tkTopic'))) {
+            if (roots.indexOf(el) < 0) roots.push(el);
+          }
+
+          let root: Element | null = null;
+          let opts: Element[] = [];
+          for (const r of roots) {
+            if (!visible(r)) continue;
+            const os = Array.from(r.querySelectorAll(optSel)).filter(visible);
+            if (os.length < 2) continue;
+            // 必须含有弹题自己的控件（提交/继续/提交中），否则只是页面上一个
+            // 长得像的空容器（超星页面上常驻一堆空 .tkTopic）
+            const hasCtl =
+              !!r.querySelector(submitSel) ||
+              !!r.querySelector('#videoquiz-continue') ||
+              !!r.querySelector('#videoquiz-submitting');
+            if (!hasCtl) continue;
+            root = r;
+            opts = os;
+            break;
+          }
           if (!root) return null;
-          const opts = Array.from(root.querySelectorAll(optSel)).filter(visible);
-          if (opts.length < 2) return null;
 
-          const feedback = (): string => {
-            if (visible(document.querySelector('#spanNot')) || visible(document.querySelector('#spanNotBack')))
-              return 'incorrect';
-            if (visible(document.querySelector('#videoquiz-continue'))) return 'continue';
-            if (visible(document.querySelector('#spanHas'))) return 'correct';
-            if (visible(document.querySelector('#videoquiz-submitting'))) return 'submitting';
-            return 'open';
-          };
+          // 反馈判定。顺序要紧：
+          //  1) 答错优先（错题要重选）
+          //  2) 「继续学习」按钮：InteractiveQuiz 答对后它与「恭喜你，答对了！」同时可见，
+          //     走到这一步说明已经答完，只等点掉
+          //  3) 提交中
+          //  4) 答对（必须同时匹配「答对/恭喜」字样 —— #spanHas 区域里还挂着
+          //     「共 X 题，已答对 Y 题」的进度计数，不能只看它可见就当答对了）
+          //
+          // ⚠️ 选择器要同时容忍 id 与 class 两种写法。
+          // 源码模板（videojs-ext.min.js）实证：
+          //   答错 → <span class="spanNotBack fr" id="spanNotBackPoint">
+          //   答对 → Ext.get('spanHas').setHTML('<span class="spanHas fr" ...><span id="InteractiveQuizTip">…')
+          // 后者是「把 #spanHas 的 innerHTML 整个换掉」，所以 #spanHas 元素还在，
+          // 但真正显示文字的可能是它的子节点。只认一个 id/class 都会漏判。
+          let feedback = 'open';
+          {
+            // ⚠️ 这里刻意**不写** `const hit = (sels) => ...` 这样的函数变量：
+            // 打包器会给具名函数注入 __name(...) 包装，浏览器侧没有这个符号，
+            // 整个 evaluate 会抛 ReferenceError 并被外层 catch 吞掉。
+            // 所以一律用内联循环。
+            const NOT_SELS = ['#spanNot', '#spanNotBack', '#spanNotBackPoint', '.spanNot', '.spanNotBack'];
+            const CONT_SELS = ['#videoquiz-continue', '.ans-videoquiz-continue'];
+            const SUBMITTING_SELS = ['#videoquiz-submitting', '.ans-videoquiz-submitting'];
+            const HAS_SELS = ['#spanHas', '.spanHas', '#InteractiveQuizTip', '.ans-videoquiz-tip'];
+            const HAS_TEXT_SELS = ['#spanHas', '.spanHas', '#InteractiveQuizTip'];
 
-          const q = (e: Element | null) => (e ? (e.textContent || '').replace(/\s+/g, ' ').trim() : '');
+            let hit = false;
+            for (const s of NOT_SELS) {
+              const el = document.querySelector(s);
+              if (el && visible(el)) { hit = true; break; }
+            }
+            if (hit) {
+              feedback = 'incorrect';
+            } else {
+              hit = false;
+              for (const s of CONT_SELS) {
+                const el = document.querySelector(s);
+                if (el && visible(el)) { hit = true; break; }
+              }
+              if (hit) {
+                feedback = 'continue';
+              } else {
+                hit = false;
+                for (const s of SUBMITTING_SELS) {
+                  const el = document.querySelector(s);
+                  if (el && visible(el)) { hit = true; break; }
+                }
+                if (hit) {
+                  feedback = 'submitting';
+                } else {
+                  let tipText = '';
+                  for (const s of HAS_TEXT_SELS) {
+                    const el = document.querySelector(s);
+                    if (el) tipText += ' ' + q(el);
+                  }
+                  // 「共 X 题，已答对 Y 题」这个进度计数里也含「答对」二字，
+                  // 剔掉它，否则未作答时也会被误判成「已答对」
+                  tipText = tipText.replace(/共\s*\d+\s*题[，,]?\s*已答对\s*\d+\s*题/g, ' ');
+                  let hasVisible = false;
+                  for (const s of HAS_SELS) {
+                    const el = document.querySelector(s);
+                    if (el && visible(el)) { hasVisible = true; break; }
+                  }
+                  if (hasVisible && /答对|恭喜|回答正确/.test(tipText)) {
+                    feedback = 'correct';
+                  } else if (!submitVisible) {
+                    // 提交按钮已经不见了、又没有任何反馈元素 → 多半是答完正在自动收起
+                    feedback = 'correct';
+                  }
+                }
+              }
+            }
+          }
+
           // 题干：排除选项行之后剩下的文字
           const optTexts = opts.map(o => q(o));
           let stem = q(root);
           for (const t of optTexts) if (t) stem = stem.replace(t, ' ');
           // 隐藏的反馈元素也在 root 里，不剔就会混进题干。真机实测（基础英语读写 3.2）
           // 抽出来原本是：「……will be great. 提交提交中继续回答正确回答错误回答错误，回看  分钟」
+          // InteractiveQuiz 还要额外剔掉两处（文案表 VideoExtLang 实证）：
+          //   「共 X 题，已答对 Y 题」→ qTotal+qs / qAnsweR+qs
+          //   「恭喜你，答对了！」   → corretTip1
           stem = stem
-            .replace(/(提交中|回答正确|回答错误|继续|回看|提交)+/g, ' ')
+            .replace(/共\s*\d+\s*题[，,]?\s*已答对\s*\d+\s*题/g, ' ')
+            .replace(/恭喜你[，,]?\s*答对了[！!]?/g, ' ')
+            .replace(/(提交中|回答正确|回答错误|继续学习|继续下一节|继续|回看|提交)+/g, ' ')
             .replace(/\s*\d+(\.\d+)?\s*分\s*钟?/g, ' ')
             .replace(/\s*\d+(\.\d+)?\s*分(?!钟)/g, ' ')
             // 倒计时秒数为 0 时只剩一个「， 分钟」，正则带不上数字，单独清
@@ -113,10 +252,11 @@ export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
             stem: stem || root.getAttribute('data-question') || '\\u968f\\u5802\\u9898',
             type,
             options,
-            feedback: feedback(),
+            feedback,
+            submitVisible,
           };
         },
-        { visibleSrc: VISIBLE_FN, optSel: OPT_SEL }
+        { visibleSrc: VISIBLE_FN, qSrc: Q_FN, optSel: OPT_SEL, submitSel: SUBMIT_SEL }
       );
     } catch {
       continue;
@@ -126,6 +266,7 @@ export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
       present: true,
       frame,
       feedback: st.feedback as VideoPopupFeedback,
+      submitVisible: !!st.submitVisible,
       optionCount: st.options.length,
       question: {
         index: 1,
@@ -136,7 +277,14 @@ export async function readVideoPopup(page: Page): Promise<VideoPopupState> {
       },
     };
   }
-  return { present: false, frame: null, question: null, feedback: 'open', optionCount: 0 };
+  return {
+    present: false,
+    frame: null,
+    question: null,
+    feedback: 'open',
+    submitVisible: false,
+    optionCount: 0,
+  };
 }
 
 /**
@@ -213,14 +361,10 @@ export async function clickContinueIfPresent(
       let hit: { text: string; idx: number } | null = null;
       try {
         hit = await frame.evaluate(
-          ({ overlaySel, clickSel, texts }: { overlaySel: string; clickSel: string; texts: string[] }) => {
-            const visible = (el: Element | null): boolean => {
-              if (!el) return false;
-              const cs = getComputedStyle(el);
-              if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
-              const r = el.getBoundingClientRect();
-              return r.width > 6 && r.height > 6;
-            };
+          ({ overlaySel, clickSel, texts, visibleSrc }: { overlaySel: string; clickSel: string; texts: string[]; visibleSrc: string }) => {
+            // ⚠️ visible 必须从字符串 eval 进来：写成 `const visible = (el) => ...`
+            // 会被打包器注入 __name(...) → 浏览器侧 ReferenceError → 整段 evaluate 报废。
+            const visible = eval(visibleSrc) as (el: Element | null) => boolean;
             const overlays: Element[] = [];
             for (const sel of overlaySel.split(',')) {
               let els: Element[] = [];
@@ -260,7 +404,7 @@ export async function clickContinueIfPresent(
             }
             return null;
           },
-          { overlaySel: OVERLAY_SEL, clickSel: CLICKABLE_SEL, texts: CONTINUE_TEXTS }
+          { overlaySel: OVERLAY_SEL, clickSel: CLICKABLE_SEL, texts: CONTINUE_TEXTS, visibleSrc: VISIBLE_LOOSE_FN }
         );
       } catch {
         hit = null;
@@ -326,6 +470,16 @@ export async function answerVideoPopup(
 
   if (q.options.length < 2) return { answered: 0, submitted: 0, retried: 0, closed: 'none' };
 
+  // ⚠️ 弹题还在、但提交按钮已经不可见 → 这一题**已经答过了**（超星提交后把
+  // #videoquiz-submit 置为 display:none）。这时再点选项+提交是无效操作，
+  // 只会把已答对的题重新搅乱。直接走收尾。
+  if (!first.submitVisible) {
+    h.log('info', `    → 弹题已提交过（提交按钮不可见），跳过作答，直接收尾`);
+    const closed = await settlePopup(page, h, { reason: '随堂弹题', autoWaitMs: 600 });
+    h.log('info', `    → 弹题收尾方式: ${closed}`);
+    return null;
+  }
+
   // 答
   const chain: Searcher[] = [];
   if (opts.tiku) chain.push(new CacheSearcher(opts.tiku));
@@ -376,6 +530,15 @@ export async function answerVideoPopup(
 
   // 答错：仅双选项时改选一次
   if (fb === 'incorrect' && q.options.length === 2) {
+    // 提交按钮已经不可见 = 这题已经交上去了，再改选也提交不了，直接收尾。
+    // ⚠️ 必须**重新读一次**状态：first.submitVisible 是提交**之前**的快照，
+    // 提交后超星才把按钮置为 display:none。
+    const cur = await readVideoPopup(page);
+    if (!cur.submitVisible) {
+      h.log('warn', '    ⚠ 弹题答错，但提交按钮已隐藏（已提交过），不再改选');
+      const closed = await settlePopup(page, h, { reason: '随堂弹题' });
+      return { answered: clicked, submitted: 1, retried: 0, closed };
+    }
     h.log('warn', '    ⚠ 弹题答错，双选项题改选一次');
     retried++;
     try {

@@ -167,5 +167,68 @@ check(
   '有错题必须提示'
 );
 
+// —— 第 6 组：InteractiveQuiz（视频互动测验，2026-10-21 实地抓 2.2 发现）——
+//
+// 事实：2.2 那个「弹窗题目」不是章节测验，而是**视频互动测验**：
+//   数据在 GET /mooc-ans/richvideo/initdatawithviewerV2，style:"InteractiveQuiz"，
+//   { questionType:"判断题", options:[{name:"A",description:"对"},{name:"B",description:"错"}],
+//     interactiveQuestionCount:1, startTime:107.0, answered:false }
+//   弹层由 ananas/videojs-ext/videojs-ext.min.js 渲染，
+//   提交后 `Ext.get('videoquiz-submit').setStyle('display','none')` +
+//   显示 `#videoquiz-continue`（文案 continueStudy = 「继续学习」）。
+//
+// 由此引出两条硬需求：
+//   1) 弹题「存在」不能只看提交按钮可见 —— 提交后按钮隐藏但弹题还在，
+//      要等点「继续学习」。旧逻辑会以为弹题自动收起 → 弹层一直挡着页面。
+//   2) evaluate 里不能写具名函数（打包器注入 __name → 浏览器 ReferenceError →
+//      整段 evaluate 报废且被 catch 吞掉）。必须用 eval(字符串) 取 helper。
+const vq2 = read('videoQuiz.ts');
+
+check(
+  '状态里带 submitVisible（区分「弹题还在但已提交」）',
+  /submitVisible: boolean/.test(vq2) && /submitVisible: !!st\.submitVisible/.test(vq2),
+  '没有这个字段就分不清「弹题没了」和「弹题还在但已答过」'
+);
+check(
+  '弹题存在性不只依赖提交按钮可见（用 .tkTopic + 选项 + 控件三重判定）',
+  /querySelectorAll\('\.tkTopic'\)/.test(vq2) && /hasCtl/.test(vq2),
+  '只看 submit 可见 → 提交后误判弹题已消失'
+);
+check(
+  '提交按钮不可见时不再重复作答（跳过作答直接收尾）',
+  /if \(!first\.submitVisible\)/.test(vq2) && /跳过作答，直接收尾/.test(vq2),
+  '已答过的题再点一遍会搅乱状态'
+);
+check(
+  '已提交过的残留弹题不消耗弹题次数配额',
+  /return null;/.test(vq2.split('跳过作答，直接收尾')[1]?.slice(0, 200) || ''),
+  '每轮循环都算处理一题 → 配额被提前烧光，后面的真弹题不再处理'
+);
+check(
+  '反馈判定容忍 id/class 两种写法（spanNotBackPoint / spanHas）',
+  /spanNotBackPoint/.test(vq2) && /#InteractiveQuizTip/.test(vq2),
+  '源码模板里答错是 id=spanNotBackPoint，只认旧 id 会漏判'
+);
+check(
+  '「共 X 题，已答对 Y 题」不被当成答对（进度计数含「答对」二字）',
+  /共\\s\*\\d\+\\s\*题/.test(vq2) && /已答对/.test(vq2),
+  '未作答就可能被判成 correct'
+);
+check(
+  '题干清洗剔除「恭喜你，答对了！」（corretTip1）',
+  /恭喜你\[，,\]\?/.test(vq2) || /恭喜你/.test(vq2),
+  '这句会混进题干，影响文字兜底识别'
+);
+check(
+  'evaluate 内不用具名函数（helper 走 eval 字符串）',
+  /Q_FN = `/.test(vq2) && /eval\(qSrc\)/.test(vq2) && /VISIBLE_LOOSE_FN/.test(vq2),
+  '打包器注入 __name → 浏览器 ReferenceError → 整段 evaluate 静默失效'
+);
+check(
+  '存在 DOM 级真机回归测试脚本',
+  readFileSync(new URL('test-video-popup-dom.ts', import.meta.url), 'utf8').includes('settlePopup'),
+  '缺真实 DOM 断言，这类问题还会再犯'
+);
+
 console.log(failed ? `\n${failed} 项未通过` : '\n全部通过');
 process.exit(failed ? 1 : 0);
