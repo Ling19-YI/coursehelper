@@ -406,6 +406,22 @@ function extractInPage(): { questions: QuizQuestion[] } {
 const QUIZ_FRAME_URL = /selectWorkQuestion|work\/work|VideoQuestion|ExamWork|\/(work|exam)\/(start|answer|question)/i;
 
 /**
+ * 只读批阅页：交卷之后平台把测验 iframe 落到这里。
+ *
+ * ⚠️ 它长得极像答题页—— URL 命中 QUIZ_FRAME_URL，正文里是完整的题目与选项
+ * （`#question405998102.TiMu.newTiMu`），甚至还带着「我的答案 B 33.3分」。
+ * 但它**不能作答**：上面只有批阅结果，没有可填的输入框、没有提交按钮。
+ *
+ * 真机实测（2026-10-21，人工智能基础 2.2）：这一章测验答过、得 66.6 分
+ * （第 3 题判断题答错），平台仍标「已完成」。引擎跑到这一章时，
+ * 如果把批阅页当答题页，就会拿批阅结果里的旧答案当成新题去重答——
+ * 用户看到的现象是「反复卡在同一章」或「已经做过的题又填一遍」。
+ *
+ * 所以必须单独剔除：批阅页只用来判分数，不进答题候选。
+ */
+const READONLY_MARKED_FRAME_URL = /selectWorkQuestionYiPiYue|selectWorkQuestion.*workAnswerId/i;
+
+/**
  * 明确不是测验的 frame。
  *
  * studentstudy 是课程主页：整页是章节侧边栏（目录里带「第一周作业」这类字样）
@@ -417,6 +433,8 @@ const NON_QUIZ_FRAME_URL = /\/mycourse\/studentstudy|\/mycourse\/studentPage|\/s
 export async function findQuizFrames(page: Page): Promise<Frame[]> {
   const out: Frame[] = [];
   for (const frame of page.frames()) {
+    // 只读批阅页长得像答题页，但不是。先剔除（见READONLY_MARKED_FRAME_URL 注释）
+    if (READONLY_MARKED_FRAME_URL.test(frame.url())) continue;
     if (QUIZ_FRAME_URL.test(frame.url())) {
       out.push(frame);
       continue;
@@ -443,6 +461,57 @@ export async function findQuizFrames(page: Page): Promise<Frame[]> {
     alive.push(f);
   }
   return alive.length ? alive : out;
+}
+
+/**
+ * 读「只读批阅页」上的成绩。
+ *
+ * 为什么需要它：超星把「已作答但分数没到线」的测验**也标成已完成**。
+ * 真机实测（2026-10-21，人工智能基础 2.2）：3 题答对2 题，得 66.6 分
+ * （满分 100），第 3 题判断题答错 —— 目录里 pending=0/0、标记「已完成」，
+ * 引擎据此判本章做完了，于是那一道错题永远不会被重做。
+ *
+ * 页面上两处分数（实测原文）：
+ *   · 头部「本次成绩66.6分」+ 头部「满分: 100.0」
+ *   · 每题旁「33.3分」/「0.0分」（`.answerScore`）
+ *
+ * 只在**批阅页**上调用；不在批阅页返回 null（表示「这页没有成绩可读」，
+ * 而不是「得了 0 分」——两者含义完全不同，混淆会误伤正常章节）。
+ */
+export async function readMarkedQuizScore(
+  page: Page
+): Promise<{ score: number; full: number; wrong: number; total: number } | null> {
+  for (const frame of page.frames()) {
+    if (!READONLY_MARKED_FRAME_URL.test(frame.url())) continue;
+    try {
+      const r = await frame.evaluate(() => {
+        const txt = (document.body ? document.body.innerText || '' : '').replace(/\s+/g, ' ');
+        // 「本次成绩66.6分」/「本次成绩 66.6 分」
+        const m = txt.match(/本次成绩\s*([\d.]+)\s*分/);
+        // 「满分: 100.0」
+        const f = txt.match(/满分[:：]\s*([\d.]+)/);
+        if (!m) return null;
+        // 逐题分数：0 分即该题做错
+        const per: number[] = [];
+        for (const el of Array.from(document.querySelectorAll('.answerScore'))) {
+          const t = (el.textContent || '').replace(/\s+/g, '');
+          const g = t.match(/([\d.]+)\s*分/);
+          if (g) per.push(Number(g[1]));
+        }
+        return {
+          score: Number(m[1]),
+          full: f ? Number(f[1]) : 100,
+          per,
+        };
+      });
+      if (!r) continue;
+      const wrong = r.per.filter(x => x <= 0).length;
+      return { score: r.score, full: r.full, wrong, total: r.per.length };
+    } catch {
+      /* frame 可能正在导航 */
+    }
+  }
+  return null;
 }
 
 /** 找弹窗式答题容器（随堂练习弹窗等），返回 frame + 容器选择器 */

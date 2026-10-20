@@ -26,7 +26,7 @@ import {
 } from './chaoxing';
 import { detectManualBlock } from './blocker';
 import { handleDocument } from './document';
-import { isQuizPage, handleQuiz, type AnswerChannel } from './quiz';
+import { isQuizPage, handleQuiz, readMarkedQuizScore, type AnswerChannel } from './quiz';
 import {
   activeJob,
   jobKindLabel,
@@ -901,6 +901,26 @@ export class ChaoxingEngine {
                         `    ⚠ 平台尚未把第 ${tabIndex} 个任务点标记完成（可能分数不足），下次继续`
                       );
                     }
+
+                    // 「标记完成」不等于「全做对」。
+                    // 实测（2026-10-21，人工智能基础 2.2）：3 题答对 2 题得 66.6 分
+                    // （满分 100），平台照样标「已完成」，目录 pending 也清零。
+                    // 于是引擎判本章做完 → 那一道错题再也不会被重做，
+                    // 用户看到的是「这个章节怎么一直不做对」。
+                    // 这里读一次批阅页分数，有错题就如实说出来，
+                    // 让人知道平台记账 ≠ 自己做对了。
+                    const score = await readMarkedQuizScore(this.opts.page);
+                    if (score && score.wrong > 0) {
+                      this.log(
+                        'warn',
+                        `    ⚠ 本次成绩 ${score.score}/${score.full} 分，` +
+                          `${score.total} 题里错了 ${score.wrong} 题` +
+                          `（平台仍标记为已完成，这一章不会再重做）`
+                      );
+                    } else if (score) {
+                      this.log('info', `    · 本次成绩 ${score.score}/${score.full} 分`);
+                    }
+
                     if (doneTabs.size >= jobTabs.length) {
                       if (markDone()) summary.completed++;
                       result = 'completed';

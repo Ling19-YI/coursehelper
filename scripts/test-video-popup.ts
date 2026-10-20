@@ -125,5 +125,47 @@ check(
   '点到按钮≠ 弹窗收起，必须复检'
 );
 
+// —— 第 5 组：可作答页 vs 只读批阅页（2026-10-21 实地抓 2.2 发现）——
+// 事实：2.2 章节测验得 66.6/100 分（3 题错 1 题判断题），
+// 但平台照样标「已完成」、目录 pending 清零。
+// 切到任务点 2 落在 selectWorkQuestionYiPiYue（只读批阅页），
+// 不是 doHomeWorkNew（可作答页）。若不剔除，会拿批阅页里的旧答案重答。
+check(
+  '识别只读批阅页 URL（selectWorkQuestionYiPiYue / workAnswerId）',
+  /READONLY_MARKED_FRAME_URL[\s\S]{0,160}selectWorkQuestionYiPiYue/.test(quiz) &&
+    /workAnswerId/.test(quiz),
+  '批阅页长得像答题页，不识别就会重答'
+);
+check(
+  'findQuizFrames 剔除只读批阅页',
+  /READONLY_MARKED_FRAME_URL\.test\(frame\.url\(\)\)\)\s*continue/.test(quiz),
+  '批阅页必须从可作答帧里剔除'
+);
+check(
+  '存在 readMarkedQuizScore 读批阅页成绩',
+  /export async function readMarkedQuizScore/.test(quiz),
+  '读不到成绩就发现不了「做了但有错题」'
+);
+check(
+  'readMarkedQuizScore 解析本次成绩与满分',
+  /本次成绩/.test(quiz) && /满分/.test(quiz),
+  '成绩/满分取不到'
+);
+check(
+  'readMarkedQuizScore 统计错题数（按每题得分 <=0）',
+  /wrong/.test(quiz) && /<=\s*0/.test(quiz),
+  '错题数算不出来'
+);
+check(
+  '引擎在判定「本章全完成」前核对成绩',
+  /readMarkedQuizScore/.test(index) && /本次成绩/.test(index),
+  '平台标完成≠ 全做对，必须核对分数'
+);
+check(
+  '有错题时给出告警而不是静默放过',
+  /wrong > 0/.test(index) && /warn/.test(index),
+  '有错题必须提示'
+);
+
 console.log(failed ? `\n${failed} 项未通过` : '\n全部通过');
 process.exit(failed ? 1 : 0);
